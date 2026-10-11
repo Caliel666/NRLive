@@ -163,6 +163,7 @@ PY
 # Keep detailed ACO pipeline tracing opt-in via NR_ACO_DUMP; avoid per-pipeline log spam in normal runs.
 
 python3 - <<'PY'
+from pathlib import Path
 # ACO record parsing, shell loading, capture, splice or binary import can throw. Keep
 # those failures local to this shader and retry with the original SPIR-V through the driver.
 # This preserves the rest of network initialization and logs the exact failed kernel.
