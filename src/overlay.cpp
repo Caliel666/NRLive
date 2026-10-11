@@ -80,11 +80,20 @@ static std::wstring runtimeIniPath() {
   return s.substr(0, s.find_last_of(L"\\/") + 1) + L"dlssnr-amd.ini";
 }
 
-// Upstream reads [Network] ACO Mode once during initialization.
-static void syncAcoModeToRuntimeIni() {
+// Upstream reads [Network] ACO Mode once during initialization. Verify the
+// actual game-folder INI write instead of silently showing a successful toggle.
+static bool syncAcoModeToRuntimeIni() {
   const std::wstring path = runtimeIniPath();
-  WritePrivateProfileStringW(L"Network", L"ACO Mode",
-      g_dlssNr.acoMode ? L"1" : L"0", path.c_str());
+  const wchar_t* expected = g_dlssNr.acoMode ? L"1" : L"0";
+  const BOOL wrote = WritePrivateProfileStringW(L"Network", L"ACO Mode",
+      expected, path.c_str());
+  wchar_t actual[16]{};
+  GetPrivateProfileStringW(L"Network", L"ACO Mode", L"", actual,
+      (DWORD)(sizeof(actual) / sizeof(actual[0])), path.c_str());
+  const bool verified = wrote && wcscmp(actual, expected) == 0;
+  if (!verified)
+    g_saveStatus = L"ACO Mode INI write failed; check folder permissions";
+  return verified;
 }
 
 static void loadCfg() {
@@ -103,9 +112,9 @@ static void loadCfg() {
   g_dlssNr.maxRatio = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"max_ratio", 200, ini.c_str()), 100, 800) / 100.0f;
   g_dlssNr.structure = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"structure", 100, ini.c_str()), 0, 200) / 100.0f;
   g_dlssNr.skinStructure = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"skin_structure", -100, ini.c_str()), -100, 200) / 100.0f;
-  g_dlssNr.historyStrength = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"history_strength", 80, ini.c_str()), 0, 100) / 100.0f;
+  g_dlssNr.historyStrength = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"history_strength", 20, ini.c_str()), 0, 100) / 100.0f;
   g_dlssNr.automaticSkinMask = GetPrivateProfileIntW(L"DLSSNR", L"automatic_skin_mask", 1, ini.c_str()) != 0;
-  g_dlssNr.stabilizer = GetPrivateProfileIntW(L"DLSSNR", L"stabilizer", 0, ini.c_str()) != 0;
+  g_dlssNr.stabilizer = GetPrivateProfileIntW(L"DLSSNR", L"stabilizer", 1, ini.c_str()) != 0;
   g_dlssNr.passes = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"passes", 1, ini.c_str()), 1, 3);
   g_sharpness = std::clamp(GetPrivateProfileIntW(L"FSR", L"sharpness", 65, ini.c_str()) / 100.0f, 0.0f, 1.0f);
   g_cfg.fps = GetPrivateProfileIntW(L"FPS", L"fps", 1, ini.c_str()) != 0;
@@ -123,7 +132,18 @@ static void loadCfg() {
   GetPrivateProfileStringW(L"General", L"screenshot_path", L"", path, MAX_PATH * 4, ini.c_str());
   if (path[0]) g_shotPath = path;
   else { SHGetFolderPathW(nullptr, CSIDL_MYPICTURES, nullptr, SHGFP_TYPE_CURRENT, path); g_shotPath = path; if (!g_shotPath.empty() && g_shotPath.back() != L'\\') g_shotPath += L'\\'; g_shotPath += L"NRLive"; }
-  g_dlssNr.acoMode = GetPrivateProfileIntW(L"DLSSNR", L"aco_mode", 0, ini.c_str()) != 0;
+  // Migrate an existing upstream setting on first launch instead of forcing
+  // ACO off merely because this launcher has no saved aco_mode key yet.
+  wchar_t savedAco[16]{};
+  GetPrivateProfileStringW(L"DLSSNR", L"aco_mode", L"", savedAco,
+      (DWORD)(sizeof(savedAco) / sizeof(savedAco[0])), ini.c_str());
+  if (savedAco[0]) {
+    g_dlssNr.acoMode = wcstol(savedAco, nullptr, 10) != 0;
+  } else {
+    const std::wstring runtimeIni = runtimeIniPath();
+    g_dlssNr.acoMode = GetPrivateProfileIntW(L"Network", L"ACO Mode", 0,
+        runtimeIni.c_str()) != 0;
+  }
   syncAcoModeToRuntimeIni();
 }
 
