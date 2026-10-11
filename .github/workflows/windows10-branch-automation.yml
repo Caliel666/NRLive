@@ -1,4 +1,5 @@
 name: Windows 10 branch automation
+# Main pushes and version tags keep the dedicated Windows 10 branch current.
 
 on:
   push:
