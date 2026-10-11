@@ -41,6 +41,7 @@ struct OverlayDlssNrConfig {
   float historyStrength = 0.8f;
   bool automaticSkinMask = true;
   bool stabilizer = false; // motion-only residual stabilizer
+  bool acoMode = false; // upstream ACO network machine code; restart required
 };
 
 // ── Overlay API ───────────────────────────────────────────────────────────
