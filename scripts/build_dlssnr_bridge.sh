@@ -94,6 +94,8 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
         // every 16 MiB chunk. If the driver cannot allocate it, keep the
         // original bounded-memory implementation below.
         if (bytes <= (VkDeviceSize(256) << 20)) {
+            nr::logf("[nr] weight upload: allocating %.1f MB single staging buffer",
+                     double(bytes) / 1e6);
             Buffer stage{};
             try {
                 stage = buffer(bytes, true);
