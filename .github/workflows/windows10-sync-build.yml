@@ -1,0 +1,131 @@
+name: Windows 10 sync and build
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        description: "Main branch or tag to merge into windows10"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows10-sync-build
+  cancel-in-progress: false
+
+jobs:
+  sync-and-build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout Windows 10 branch
+        uses: actions/checkout@v4
+        with:
+          ref: windows10
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge selected main/tag revision into windows10 and reapply Windows 10 patches
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main --tags
+          git fetch origin "$env:SOURCE_REF"
+          git merge --no-edit "FETCH_HEAD"
+          $project = "ui/NRLiveUI.csproj"
+          [xml]$xml = Get-Content -Raw $project
+          $framework = $xml.Project.PropertyGroup | Where-Object { $_.TargetFramework } | Select-Object -First 1
+          if (-not $framework) { throw "TargetFramework property not found in $project" }
+          $framework.TargetFramework = "net8.0-windows"
+          $xml.Save((Resolve-Path $project))
+          git add $project
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
+          }
+          git push origin HEAD:windows10
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download AMD FSR SDK 2.3.0 headers and signed providers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceUrl = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/archive/refs/tags/v2.3.0.zip"
+          $runtimeUrl = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v2.3.0/FidelityFX-Samples-v2.3.0-prebuilt.zip"
+          $sourceZip = Join-Path $env:RUNNER_TEMP "fsr-sdk-source.zip"
+          $runtimeZip = Join-Path $env:RUNNER_TEMP "fsr-sdk-runtime.zip"
+          $sourceRoot = Join-Path $env:RUNNER_TEMP "fsr-sdk-source"
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP "fsr-sdk-runtime"
+          $binRoot = Join-Path $env:RUNNER_TEMP "fsr-sdk-bin"
+          New-Item -ItemType Directory -Force $sourceRoot, $runtimeRoot, $binRoot | Out-Null
+          curl.exe -L --fail --retry 5 --retry-delay 3 --output $sourceZip $sourceUrl
+          curl.exe -L --fail --retry 5 --retry-delay 3 --output $runtimeZip $runtimeUrl
+          Expand-Archive -LiteralPath $sourceZip -DestinationPath $sourceRoot -Force
+          Expand-Archive -LiteralPath $runtimeZip -DestinationPath $runtimeRoot -Force
+          $sdk = Get-ChildItem -Path $sourceRoot -Directory | Select-Object -First 1
+          if (-not $sdk) { throw "FSR SDK source archive did not extract." }
+          foreach ($relative in @(
+            "Kits/FidelityFX/api/include/ffx_api.h",
+            "Kits/FidelityFX/framegeneration/include/ffx_framegeneration.h",
+            "Kits/FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.h",
+            "Kits/FidelityFX/upscalers/include/ffx_upscale.h"
+          )) {
+            if (-not (Test-Path (Join-Path $sdk.FullName $relative))) { throw "FSR SDK header missing: $relative" }
+          }
+          foreach ($dllName in @("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll")) {
+            $found = Get-ChildItem -Path $runtimeRoot -Recurse -File -Filter $dllName | Select-Object -First 1
+            if (-not $found) { throw "FSR runtime DLL missing: $dllName" }
+            Copy-Item -LiteralPath $found.FullName -Destination (Join-Path $binRoot $dllName) -Force
+          }
+          "FFX_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFX_BIN=$binRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure native build
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DBUILD_TESTING=ON
+
+      - name: Build native app and tests
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Run tests
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Publish .NET 8 launcher and assemble package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = "build/windows10-package"
+          dotnet publish ui/NRLiveUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o $package
+          if (-not (Test-Path "$package/NRLiveUI.exe")) { throw ".NET 8 NRLiveUI.exe was not produced." }
+          Copy-Item "build/Release/NRLive.exe" $package -Force
+          foreach ($dll in @("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll")) {
+            Copy-Item "build/Release/$dll" $package -Force
+          }
+          $runtime = "build/dlssnr-runtime"
+          if (Test-Path "$runtime/NRLiveDlssNrBridge.dll") {
+            Copy-Item "$runtime/NRLiveDlssNrBridge.dll" $package -Force
+            Copy-Item "$runtime/dlssnr_extract_model.exe" $package -Force
+            Copy-Item "$runtime/DLSSNR-AMD-LICENSE.txt" $package -Force
+            Copy-Item "$runtime/DLSSNR-AMD-UPSTREAM-README.txt" $package -Force
+            Copy-Item "$runtime/dlssnr-amd" $package -Recurse -Force
+          }
+          Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
+          if (-not (Test-Path "$package/NRLive.exe")) { throw "NRLive.exe missing from package" }
+          if (-not (Test-Path "$package/NRLiveUI.exe")) { throw "NRLiveUI.exe missing from package" }
+
+      - name: Upload Windows 10 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NRLive-windows10-net8-x64
+          path: build/windows10-package/**
+          if-no-files-found: error
