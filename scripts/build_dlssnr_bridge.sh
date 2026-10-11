@@ -80,7 +80,7 @@ if include not in s:
     needle = '#include "nr_pipeline_binary.hpp"'
     if needle not in s:
         raise SystemExit("Could not locate Vulkan pipeline-binary include")
-    s = s.replace(needle, needle + "\\n" + include, 1)
+    s = s.replace(needle, needle + "\n" + include, 1)
 start = s.find("    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize bytes,")
 end = s.find("    void upload(Buffer& b, VkDeviceSize off,", start)
 if start < 0 or end < 0:
