@@ -16,7 +16,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  sync:
+    name: Sync main/tag changes and reapply Windows 10 patches
+    runs-on: windows-2022
+    steps:
+      - name: Checkout Windows 10 branch
+        uses: actions/checkout@v4
+        with:
+          ref: windows10
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge selected main/tag revision into windows10 and reapply Windows 10 patches
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main --tags
+          git fetch origin "$env:SOURCE_REF"
+          git merge -X ours --no-edit FETCH_HEAD
+          $project = "ui/NRLiveUI.csproj"
+          [xml]$xml = Get-Content -Raw $project
+          $framework = $xml.Project.PropertyGroup | Where-Object { $_.TargetFramework } | Select-Object -First 1
+          if (-not $framework) { throw "TargetFramework property not found in $project" }
+          $framework.TargetFramework = "net8.0-windows"
+          $xml.Save((Resolve-Path $project))
+          git add $project
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
+          }
+          $cmake = "CMakeLists.txt"
+          $cmakeText = Get-Content -Raw $cmake
+          $oldDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS"
+          $newDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS WINVER=0x0A00 _WIN32_WINNT=0x0A00"
+          if ($cmakeText.Contains($oldDefs) -and -not $cmakeText.Contains($newDefs)) {
+            $cmakeText = $cmakeText.Replace($oldDefs, $newDefs)
+            Set-Content -Path $cmake -Value $cmakeText -NoNewline
+          }
+          git add $project $cmake
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
+          }
+          git push origin HEAD:windows10
+
   dlssnr-runtime:
+    needs: sync
     name: Build DLSSNR bridge and stage runtime assets
     runs-on: ubuntu-latest
     steps:
@@ -66,8 +113,8 @@ jobs:
           if-no-files-found: error
 
   sync-and-build:
-    name: Sync Windows 10 patches, build and test
-    needs: dlssnr-runtime
+    name: Build and test Windows 10 package
+    needs: [sync, dlssnr-runtime]
     runs-on: windows-2022
     steps:
       - name: Checkout Windows 10 branch
@@ -76,41 +123,6 @@ jobs:
           ref: windows10
           fetch-depth: 0
           persist-credentials: true
-
-      - name: Merge selected main/tag revision into windows10 and reapply Windows 10 patches
-        shell: pwsh
-        env:
-          SOURCE_REF: ${{ inputs.source_ref }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main --tags
-          git fetch origin "$env:SOURCE_REF"
-          git merge -X ours --no-edit FETCH_HEAD
-          $project = "ui/NRLiveUI.csproj"
-          [xml]$xml = Get-Content -Raw $project
-          $framework = $xml.Project.PropertyGroup | Where-Object { $_.TargetFramework } | Select-Object -First 1
-          if (-not $framework) { throw "TargetFramework property not found in $project" }
-          $framework.TargetFramework = "net8.0-windows"
-          $xml.Save((Resolve-Path $project))
-          git add $project
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
-          }
-          $cmake = "CMakeLists.txt"
-          $cmakeText = Get-Content -Raw $cmake
-          $oldDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS"
-          $newDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS WINVER=0x0A00 _WIN32_WINNT=0x0A00"
-          if ($cmakeText.Contains($oldDefs) -and -not $cmakeText.Contains($newDefs)) {
-            $cmakeText = $cmakeText.Replace($oldDefs, $newDefs)
-            Set-Content -Path $cmake -Value $cmakeText -NoNewline
-          }
-          git add $project $cmake
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
-          }
-          git push origin HEAD:windows10
 
       - name: Download DLSSNR runtime
         uses: actions/download-artifact@v4
