@@ -65,6 +65,88 @@ if old in s:
 elif new not in s:
     raise SystemExit("Could not patch D3D12 queue frame source forwarding")
 PY
+
+# ACO-enabled Windows builds were stalling in the many-submit weight-upload
+# path on RDNA4. Use one mapped staging allocation and one queue submission for
+# normal model weights; retain the original chunked path if the allocation is
+# too large or unavailable. The bridge is x64-only, so a 172 MB staging buffer
+# does not carry the old 32-bit address-space concern.
+python3 - <<'PY'
+from pathlib import Path
+p = Path("windows/src/core/nrvk.hpp")
+s = p.read_text()
+include = '#include "nr_log.hpp"'
+if include not in s:
+    needle = '#include "nr_pipeline_binary.hpp"'
+    if needle not in s:
+        raise SystemExit("Could not locate Vulkan pipeline-binary include")
+    s = s.replace(needle, needle + "\\n" + include, 1)
+start = s.find("    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize bytes,")
+end = s.find("    void upload(Buffer& b, VkDeviceSize off,", start)
+if start < 0 or end < 0:
+    raise SystemExit("Could not locate Context::upload_with in upstream nrvk.hpp")
+new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize bytes,
+                     const std::function<void(VkDeviceSize, VkDeviceSize, uint8_t*)>& fill) {
+        if (!bytes) return;
+#if defined(_WIN64)
+        // The DLSSNR bridge is x64-only. A single staging transfer avoids
+        // repeatedly creating pools/fences and waiting on the same queue for
+        // every 16 MiB chunk. If the driver cannot allocate it, keep the
+        // original bounded-memory implementation below.
+        if (bytes <= (VkDeviceSize(256) << 20)) {
+            Buffer stage{};
+            try {
+                stage = buffer(bytes, true);
+            } catch (const std::exception& e) {
+                nr::logf("[nr] single-buffer weight upload unavailable (%s); using chunked upload", e.what());
+            }
+            if (stage.handle) {
+                try {
+                    fill(0, bytes, static_cast<uint8_t*>(stage.mapped));
+                    nr::logf("[nr] weight upload: submitting %.1f MB in one transfer",
+                             double(bytes) / 1e6);
+                    one_shot([&](VkCommandBuffer cmd) {
+                        VkBufferCopy region{};
+                        region.srcOffset = 0; region.dstOffset = offset; region.size = bytes;
+                        vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
+                    });
+                } catch (...) {
+                    destroy(stage);
+                    throw;
+                }
+                destroy(stage);
+                nr::logf("[nr] weight upload: single transfer completed");
+                return;
+            }
+        }
+#endif
+        const VkDeviceSize chunk = std::min(bytes, kStageBytes);
+        Buffer stage = buffer(chunk, true);
+        try {
+            for (VkDeviceSize done = 0; done < bytes; done += chunk) {
+                const VkDeviceSize n = std::min(chunk, bytes - done);
+                nr::logf("[nr] weight upload: chunk %.1f / %.1f MB begin",
+                         double(done) / 1e6, double(bytes) / 1e6);
+                fill(done, n, static_cast<uint8_t*>(stage.mapped));
+                one_shot([&](VkCommandBuffer cmd) {
+                    VkBufferCopy region{};
+                    region.srcOffset = 0; region.dstOffset = offset + done; region.size = n;
+                    vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
+                });
+                nr::logf("[nr] weight upload: chunk %.1f MB complete",
+                         double(done + n) / 1e6);
+            }
+        } catch (...) {
+            destroy(stage);
+            throw;
+        }
+        destroy(stage);
+    }
+"""
+s = s[:start] + new + s[end:]
+p.write_text(s)
+PY
+
 source windows/build/arch/rdna4.sh
 python3 windows/build/generate_device_chain.py toolchain/Vulkan-Headers "$out/generated/nr_device_chain_sizes.hpp"
 cxx=x86_64-w64-mingw32-g++
