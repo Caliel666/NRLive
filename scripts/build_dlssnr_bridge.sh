@@ -186,11 +186,11 @@ if old in s:
 elif new not in s:
     raise SystemExit("Could not enable unconditional ACO pipeline stage logs")
 # Define the logger before the cache lookup, since cache hit/miss paths use it.
-s = s.replace(new + "\\n", "", 1)
+s = s.replace(new + "\n", "", 1)
 cache_marker = "    if(!cache_file.empty()) {"
 if cache_marker not in s:
     raise SystemExit("Could not locate ACO cache lookup for diagnostic logger")
-s = s.replace(cache_marker, new + "\\n" + cache_marker, 1)
+s = s.replace(cache_marker, new + "\n" + cache_marker, 1)
 # Cache hit/miss diagnostics. Don't print full paths to avoid enormous logs.
 old = '        if(load_cached(cache_file,key,blob)) {\n            try{return import_pipeline(f,device,ci,key,blob);}catch(const std::exception&){}   // made again below\n        }'
 new = '        if(load_cached(cache_file,key,blob)) {\n            step("cached binary found; importing");\n            try { auto p=import_pipeline(f,device,ci,key,blob); step("cached binary imported"); return p; }\n            catch(const std::exception& e) { std::fprintf(stderr,"[nr] ACO cached import failed: %s; rebuilding binary\\n",e.what()); std::fflush(stderr); }\n        } else { step("cache miss; compiling template and capturing binary"); }'
