@@ -87,7 +87,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main --tags
           git fetch origin "$env:SOURCE_REF"
-          git merge --no-edit FETCH_HEAD
+          git merge -X ours --no-edit FETCH_HEAD
           $project = "ui/NRLiveUI.csproj"
           [xml]$xml = Get-Content -Raw $project
           $framework = $xml.Project.PropertyGroup | Where-Object { $_.TargetFramework } | Select-Object -First 1
