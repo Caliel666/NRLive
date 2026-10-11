@@ -256,8 +256,36 @@ if old in s:
     s = s.replace(old, new, 1)
 elif new not in s:
     raise SystemExit("Could not wire the configured ACO pipeline cache into create_or_default")
+# A missing or incompatible ACO record currently throws out of the background network build.
+# Keep the frame path alive: log the exact kernel and use the AMD driver's compiler for that
+# pipeline. This is especially important when the shipped ACO bundle lacks a Windows SPIR-V hash.
+p = Path("windows/src/core/nr_pipeline_binary.hpp")
+s = p.read_text()
+start_marker = 'inline VkResult create_or_default(VkDevice device,VkPipelineCache cache,const VkComputePipelineCreateInfo& ci,'
+if start_marker not in s:
+    raise SystemExit("Could not locate create_or_default for ACO fallback patch")
+try_marker = '    pal::require(enabled(device),"binary mode was not enabled when this device was created");'
+if try_marker in s:
+    s = s.replace(try_marker, '    try {\n' + try_marker, 1)
+elif '    try {\n' + try_marker not in s:
+    raise SystemExit("Could not add ACO pipeline fallback boundary")
+end_marker = '    *out=create(device,ci,record,push_bytes,workgroup,cache_file);\n    return VK_SUCCESS;\n}'
+end_new = '''    *out=create(device,ci,record,push_bytes,workgroup,cache_file);
+    return VK_SUCCESS;
+    } catch (const std::exception& e) {
+        const std::string kernel = path.substr(path.find_last_of("/\\\\") + 1);
+        nr::logf("[nr] ACO pipeline %s failed (%s); using the AMD driver's compiler for this kernel",
+                 kernel.c_str(), e.what());
+        return vkCreateComputePipelines(device, cache, 1, &ci, nullptr, out);
+    }
+}'''
+if end_marker in s:
+    s = s.replace(end_marker, end_new, 1)
+elif end_new in s:
+    pass
+else:
+    raise SystemExit("Could not add native-compiler fallback after ACO pipeline failure")
 p.write_text(s)
-PY
 
 source windows/build/arch/rdna4.sh
 python3 windows/build/generate_device_chain.py toolchain/Vulkan-Headers "$out/generated/nr_device_chain_sizes.hpp"
