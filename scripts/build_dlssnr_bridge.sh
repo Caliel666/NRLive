@@ -237,9 +237,9 @@ p.write_text(s)
 p = Path("windows/src/core/nr_pipeline_binary.hpp")
 s = p.read_text()
 if "#include <filesystem>" not in s:
-    s = s.replace("#include <cstdio>", "#include <cstdio>\\n#include <filesystem>", 1)
+    s = s.replace("#include <cstdio>", "#include <cstdio>\n#include <filesystem>", 1)
 old = "*out=create(device,ci,record,push_bytes,workgroup);return VK_SUCCESS;"
-new = r\'''    std::string cache_file;
+new = r'''    std::string cache_file;
     const std::string cache_root = cache_dir();
     if (!cache_root.empty()) {
         cache_file = cache_root + "/" + std::to_string(identity()) + "/" + keyname(h);
@@ -251,7 +251,7 @@ new = r\'''    std::string cache_file;
         }
     }
     *out=create(device,ci,record,push_bytes,workgroup,cache_file);
-    return VK_SUCCESS;\'''
+    return VK_SUCCESS;'''
 if old in s:
     s = s.replace(old, new, 1)
 elif new not in s:
