@@ -229,6 +229,34 @@ elif new not in s:
 if '#include <chrono>' not in s:
     s = s.replace('#include <cstdint>', '#include <chrono>\n#include <cstdint>', 1)
 p.write_text(s)
+
+# The upstream create_or_default path forgot to pass its configured cache
+# directory into create(), so every launch recompiled every ACO pipeline. Persist
+# imported ACO binaries per GPU/driver identity and SPIR-V hash. A cache miss still
+# follows the original capture/splice/import path; cache errors only disable caching.
+p = Path("windows/src/core/nr_pipeline_binary.hpp")
+s = p.read_text()
+if "#include <filesystem>" not in s:
+    s = s.replace("#include <cstdio>", "#include <cstdio>\\n#include <filesystem>", 1)
+old = "*out=create(device,ci,record,push_bytes,workgroup);return VK_SUCCESS;"
+new = r\'''    std::string cache_file;
+    const std::string cache_root = cache_dir();
+    if (!cache_root.empty()) {
+        cache_file = cache_root + "/" + std::to_string(identity()) + "/" + keyname(h);
+        try {
+            std::filesystem::create_directories(std::filesystem::path(cache_file).parent_path());
+        } catch (const std::exception& e) {
+            nr::logf("[nr] ACO pipeline cache unavailable (%s); compiling without persistent cache", e.what());
+            cache_file.clear();
+        }
+    }
+    *out=create(device,ci,record,push_bytes,workgroup,cache_file);
+    return VK_SUCCESS;\'''
+if old in s:
+    s = s.replace(old, new, 1)
+elif new not in s:
+    raise SystemExit("Could not wire the configured ACO pipeline cache into create_or_default")
+p.write_text(s)
 PY
 
 source windows/build/arch/rdna4.sh
