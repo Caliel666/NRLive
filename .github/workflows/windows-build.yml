@@ -55,6 +55,10 @@ jobs:
           test -s build/dlssnr-runtime/dlssnr_extract_model.exe
           test -s build/dlssnr-runtime/DLSSNR-AMD-LICENSE.txt
           test -d build/dlssnr-runtime/dlssnr-amd/shaders
+          # ACO mode is only useful if the release actually ships its pipeline
+          # records and matching shader templates; fail packaging if either is absent.
+          test -d build/dlssnr-runtime/dlssnr-amd/aco/records
+          test -d build/dlssnr-runtime/dlssnr-amd/aco/shaders
           test ! -e build/dlssnr-runtime/dlssnr-amd/dlssnr.bin
           du -sh build/dlssnr-runtime
 
@@ -209,6 +213,8 @@ jobs:
             if (-not (Test-Path (Join-Path $package $file))) { throw "Portable package is missing $file" }
           }
           if (-not (Test-Path "$package/dlssnr-amd/shaders")) { throw "DLSSNR shader runtime was not packaged." }
+          if (-not (Test-Path "$package/dlssnr-amd/aco/records")) { throw "DLSSNR ACO pipeline records were not packaged." }
+          if (-not (Test-Path "$package/dlssnr-amd/aco/shaders")) { throw "DLSSNR ACO shader templates were not packaged." }
           if (Test-Path "$package/dlssnr-amd/dlssnr.bin") { throw "The package must not redistribute NVIDIA model weights." }
           Get-ChildItem $package | Select-Object Name, Length | Format-Table -AutoSize
 
