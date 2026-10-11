@@ -2,6 +2,8 @@ name: Windows 10 branch automation
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "*"
   workflow_dispatch:
