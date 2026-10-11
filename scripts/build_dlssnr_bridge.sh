@@ -66,11 +66,10 @@ elif new not in s:
     raise SystemExit("Could not patch D3D12 queue frame source forwarding")
 PY
 
-# ACO-enabled Windows builds were stalling in the many-submit weight-upload
-# path on RDNA4. Use one mapped staging allocation and one queue submission for
-# normal model weights; retain the original chunked path if the allocation is
-# too large or unavailable. The bridge is x64-only, so a 172 MB staging buffer
-# does not carry the old 32-bit address-space concern.
+# ACO-enabled Windows builds stall during weight upload on RDNA4. Batch bounded
+# 16 MiB staging allocations into one command-buffer submission to avoid both a
+# huge contiguous mapped allocation and repeated queue/fence waits. Keep the
+# original serial path as an allocation-failure fallback.
 python3 - <<'PY'
 from pathlib import Path
 p = Path("windows/src/core/nrvk.hpp")
@@ -89,36 +88,58 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
                      const std::function<void(VkDeviceSize, VkDeviceSize, uint8_t*)>& fill) {
         if (!bytes) return;
 #if defined(_WIN64)
-        // The DLSSNR bridge is x64-only. A single staging transfer avoids
-        // repeatedly creating pools/fences and waiting on the same queue for
-        // every 16 MiB chunk. If the driver cannot allocate it, keep the
-        // original bounded-memory implementation below.
+        // Avoid both a single 172 MB contiguous host-visible allocation and
+        // eleven serial queue submissions. Allocate bounded 16 MiB staging
+        // buffers, fill them, then record every copy into one command buffer
+        // and wait once. This preserves bounded individual allocations while
+        // removing repeated queue/fence churn from the ACO startup path.
         if (bytes <= (VkDeviceSize(256) << 20)) {
-            nr::logf("[nr] weight upload: allocating %.1f MB single staging buffer",
-                     double(bytes) / 1e6);
-            Buffer stage{};
+            const VkDeviceSize chunk = kStageBytes;
+            std::vector<Buffer> stages;
+            bool allocated = true;
             try {
-                stage = buffer(bytes, true);
+                for (VkDeviceSize done = 0; done < bytes; done += chunk) {
+                    const VkDeviceSize n = std::min(chunk, bytes - done);
+                    nr::logf("[nr] weight upload: allocating staging chunk %.1f MB at %.1f / %.1f MB",
+                             double(n) / 1e6, double(done) / 1e6, double(bytes) / 1e6);
+                    stages.push_back(buffer(n, true));
+                }
             } catch (const std::exception& e) {
-                nr::logf("[nr] single-buffer weight upload unavailable (%s); using chunked upload", e.what());
+                allocated = false;
+                for (auto& stage : stages) destroy(stage);
+                stages.clear();
+                nr::logf("[nr] batched staging allocation unavailable (%s); using serial 16 MiB uploads", e.what());
             }
-            if (stage.handle) {
+            if (allocated) {
                 try {
-                    fill(0, bytes, static_cast<uint8_t*>(stage.mapped));
-                    nr::logf("[nr] weight upload: submitting %.1f MB in one transfer",
-                             double(bytes) / 1e6);
+                    VkDeviceSize done = 0;
+                    for (auto& stage : stages) {
+                        const VkDeviceSize n = stage.bytes;
+                        nr::logf("[nr] weight upload: filling %.1f MB at %.1f MB",
+                                 double(n) / 1e6, double(done) / 1e6);
+                        fill(done, n, static_cast<uint8_t*>(stage.mapped));
+                        done += n;
+                    }
+                    nr::logf("[nr] weight upload: submitting %zu staging chunks (%.1f MB) in one queue operation",
+                             stages.size(), double(bytes) / 1e6);
                     one_shot([&](VkCommandBuffer cmd) {
-                        VkBufferCopy region{};
-                        region.srcOffset = 0; region.dstOffset = offset; region.size = bytes;
-                        vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
+                        VkDeviceSize dst = offset;
+                        for (const auto& stage : stages) {
+                            VkBufferCopy region{};
+                            region.srcOffset = 0;
+                            region.dstOffset = dst;
+                            region.size = stage.bytes;
+                            vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
+                            dst += stage.bytes;
+                        }
                     });
+                    for (auto& stage : stages) destroy(stage);
+                    nr::logf("[nr] weight upload: batched transfer completed");
+                    return;
                 } catch (...) {
-                    destroy(stage);
+                    for (auto& stage : stages) destroy(stage);
                     throw;
                 }
-                destroy(stage);
-                nr::logf("[nr] weight upload: single transfer completed");
-                return;
             }
         }
 #endif
@@ -127,7 +148,7 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
         try {
             for (VkDeviceSize done = 0; done < bytes; done += chunk) {
                 const VkDeviceSize n = std::min(chunk, bytes - done);
-                nr::logf("[nr] weight upload: chunk %.1f / %.1f MB begin",
+                nr::logf("[nr] weight upload: serial chunk %.1f / %.1f MB begin",
                          double(done) / 1e6, double(bytes) / 1e6);
                 fill(done, n, static_cast<uint8_t*>(stage.mapped));
                 one_shot([&](VkCommandBuffer cmd) {
@@ -135,7 +156,7 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
                     region.srcOffset = 0; region.dstOffset = offset + done; region.size = n;
                     vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
                 });
-                nr::logf("[nr] weight upload: chunk %.1f MB complete",
+                nr::logf("[nr] weight upload: serial chunk %.1f MB complete",
                          double(done + n) / 1e6);
             }
         } catch (...) {
