@@ -1,0 +1,24 @@
+name: Windows 10 branch automation
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Main branch or tag to merge into windows10"
+        required: true
+        default: "main"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-build:
+    uses: Caliel666/NRLive/.github/workflows/windows10-sync-build.yml@windows10
+    with:
+      source_ref: ${{ github.event_name == 'push' && github.ref || inputs.source_ref }}
+    permissions:
+      contents: write
