@@ -57,8 +57,15 @@ nr::Controls makeControls(const NRLiveDlssNrSettings& s) {
 
 extern "C" __declspec(dllexport) void* NRLiveDlssNrCreate(const wchar_t* root) {
     try {
+        // The upstream NGX/ReShade entry points call this during DLL attach,
+        // but NRLive creates Session directly through its bridge. Configure
+        // ACO explicitly here, before Session creates its Vulkan device or
+        // builds the first network. Merely writing [Network] ACO Mode to the
+        // INI cannot enable ACO unless this one-time setup is invoked.
+        const std::string sessionRoot = utf8(root);
+        nr::pe::configure_network(sessionRoot);
         auto* host = new HostSession();
-        host->session = std::make_unique<nr::pe::Session>(utf8(root));
+        host->session = std::make_unique<nr::pe::Session>(sessionRoot);
         return host;
     } catch (...) {
         return nullptr;
