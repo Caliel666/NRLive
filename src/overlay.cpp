@@ -74,6 +74,19 @@ static std::wstring iniPath() {
   std::wstring s = p; return s.substr(0, s.find_last_of(L"\\/") + 1) + L"scaleconfig.ini";
 }
 
+static std::wstring runtimeIniPath() {
+  wchar_t p[MAX_PATH]{}; GetModuleFileNameW(nullptr, p, MAX_PATH);
+  std::wstring s = p;
+  return s.substr(0, s.find_last_of(L"\\/") + 1) + L"dlssnr-amd.ini";
+}
+
+// Upstream reads [Network] ACO Mode once during initialization.
+static void syncAcoModeToRuntimeIni() {
+  const std::wstring path = runtimeIniPath();
+  WritePrivateProfileStringW(L"Network", L"ACO Mode",
+      g_dlssNr.acoMode ? L"1" : L"0", path.c_str());
+}
+
 static void loadCfg() {
   const std::wstring ini = iniPath();
   g_fpsVisible = GetPrivateProfileIntW(L"FPS", L"enabled", 1, ini.c_str()) != 0;
@@ -110,6 +123,8 @@ static void loadCfg() {
   GetPrivateProfileStringW(L"General", L"screenshot_path", L"", path, MAX_PATH * 4, ini.c_str());
   if (path[0]) g_shotPath = path;
   else { SHGetFolderPathW(nullptr, CSIDL_MYPICTURES, nullptr, SHGFP_TYPE_CURRENT, path); g_shotPath = path; if (!g_shotPath.empty() && g_shotPath.back() != L'\\') g_shotPath += L'\\'; g_shotPath += L"NRLive"; }
+  g_dlssNr.acoMode = GetPrivateProfileIntW(L"DLSSNR", L"aco_mode", 0, ini.c_str()) != 0;
+  syncAcoModeToRuntimeIni();
 }
 
 static void saveCfg() {
@@ -145,6 +160,8 @@ static void saveCfg() {
   WritePrivateProfileStringW(L"DLSSNR", L"automatic_skin_mask", g_dlssNr.automaticSkinMask ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"stabilizer", g_dlssNr.stabilizer ? L"1" : L"0", ini.c_str());
   swprintf_s(nrValue, L"%d", std::clamp(g_dlssNr.passes, 1, 3)); WritePrivateProfileStringW(L"DLSSNR", L"passes", nrValue, ini.c_str());
+  WritePrivateProfileStringW(L"DLSSNR", L"aco_mode", g_dlssNr.acoMode ? L"1" : L"0", ini.c_str());
+  syncAcoModeToRuntimeIni();
   wchar_t sharpnessValue[16]{}; swprintf_s(sharpnessValue, L"%d", (int)std::lround(g_sharpness * 100.0f));
   WritePrivateProfileStringW(L"FSR", L"sharpness", sharpnessValue, ini.c_str());
 }
@@ -430,6 +447,7 @@ static void paintSettings(HWND h, HDC dc) {
     swprintf_s(value, L"Temporal history: %.2f", g_dlssNr.historyStrength); drawText(dc, value, 24, 322, 13, C_TEXT, false);
     swprintf_s(value, L"Local tone: %.2f", g_dlssNr.localTone); drawText(dc, value, 24, 372, 13, C_TEXT, false);
     swprintf_s(value, L"Highlight guard (max ratio): %.2f", g_dlssNr.maxRatio); drawText(dc, value, 24, 422, 13, C_TEXT, false);
+    drawText(dc, L"ACO uses bundled Mesa machine code; experimental and driver-sensitive.", 24, 656, 10, C_DIM, false);
     drawText(dc, L"Colour 0 preserves source chroma; 1 uses neural chroma.", 24, 676, 10, C_DIM, false);
     drawText(dc, L"Model weights are not included; see the DLSSNR setup instructions.", 24, 692, 10, C_DIM, false);
     drawText(dc, g_saveStatus.c_str(), 24, 712, 10, C_MUTED, false);
@@ -527,7 +545,7 @@ static void setSettingsTab(HWND h, bool dlssNr) {
   for (int id : generalIds)
     if (HWND control = GetDlgItem(h, id))
       ShowWindow(control, dlssNr ? SW_HIDE : SW_SHOW);
-  for (int id = 510; id <= 522; ++id)
+  for (int id = 510; id <= 523; ++id)
     if (HWND control = GetDlgItem(h, id))
       ShowWindow(control, dlssNr ? SW_SHOW : SW_HIDE);
 }
@@ -571,6 +589,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case 510: drawOwnerButton(dis, g_dlssNr.style == 0 ? L"Style: Neutral" : g_dlssNr.style == 1 ? L"Style: Natural" : L"Style: Cinematic", true); return TRUE;
       case 516: drawOwnerButton(dis, L"Automatic skin mask", g_dlssNr.automaticSkinMask); return TRUE;
       case 517: drawOwnerButton(dis, L"Residual stabilizer (motion-only)", g_dlssNr.stabilizer); return TRUE;
+      case 523: drawOwnerButton(dis, L"ACO Mode (restart required)", g_dlssNr.acoMode); return TRUE;
       case 520: {
         HDC dc = dis->hDC; RECT r = dis->rcItem;
         HBRUSH bg = CreateSolidBrush(C_RED); FillRect(dc, &r, bg); DeleteObject(bg);
@@ -650,9 +669,13 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g_dlssNr.style = (g_dlssNr.style + 1) % 3;
       saveCfg(); InvalidateRect(h, nullptr, FALSE); return 0;
     }
-    if (LOWORD(w) == 516 || LOWORD(w) == 517) {
+    if (LOWORD(w) == 516 || LOWORD(w) == 517 || LOWORD(w) == 523) {
       if (LOWORD(w) == 516) g_dlssNr.automaticSkinMask = !g_dlssNr.automaticSkinMask;
-      else g_dlssNr.stabilizer = !g_dlssNr.stabilizer;
+      else if (LOWORD(w) == 517) g_dlssNr.stabilizer = !g_dlssNr.stabilizer;
+      else {
+        g_dlssNr.acoMode = !g_dlssNr.acoMode;
+        g_saveStatus = L"ACO Mode saved; restart NRLive/game to apply";
+      }
       saveCfg(); InvalidateRect(h, nullptr, FALSE); return 0;
     }
     if (LOWORD(w) >= 101 && LOWORD(w) <= 106) {
@@ -809,6 +832,7 @@ bool overlayInit(HINSTANCE inst, HWND output) {
      makeNrSlider(522, 518, 0, 100, (int)std::lround(g_dlssNr.colorStrength * 100));
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 568, 200, 22, g_settings, (HMENU)516, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 598, 300, 22, g_settings, (HMENU)517, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 628, 280, 22, g_settings, (HMENU)523, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 110, 84, 100, 22, g_settings, (HMENU)102, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 216, 84, 80, 22, g_settings, (HMENU)103, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 302, 84, 100, 22, g_settings, (HMENU)104, inst, nullptr);
