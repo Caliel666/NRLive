@@ -98,6 +98,18 @@ jobs:
           if (-not (git diff --cached --quiet)) {
             git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
           }
+          $cmake = "CMakeLists.txt"
+          $cmakeText = Get-Content -Raw $cmake
+          $oldDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS"
+          $newDefs = "UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PLATFORM_WINDOWS WINVER=0x0A00 _WIN32_WINNT=0x0A00"
+          if ($cmakeText.Contains($oldDefs) -and -not $cmakeText.Contains($newDefs)) {
+            $cmakeText = $cmakeText.Replace($oldDefs, $newDefs)
+            Set-Content -Path $cmake -Value $cmakeText -NoNewline
+          }
+          git add $project $cmake
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
+          }
           git push origin HEAD:windows10
 
       - name: Download DLSSNR runtime
