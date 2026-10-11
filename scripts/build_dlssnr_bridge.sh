@@ -100,8 +100,6 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
             try {
                 for (VkDeviceSize done = 0; done < bytes; done += chunk) {
                     const VkDeviceSize n = std::min(chunk, bytes - done);
-                    nr::logf("[nr] weight upload: allocating staging chunk %.1f MB at %.1f / %.1f MB",
-                             double(n) / 1e6, double(done) / 1e6, double(bytes) / 1e6);
                     stages.push_back(buffer(n, true));
                 }
             } catch (const std::exception& e) {
@@ -115,13 +113,9 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
                     VkDeviceSize done = 0;
                     for (auto& stage : stages) {
                         const VkDeviceSize n = stage.bytes;
-                        nr::logf("[nr] weight upload: filling %.1f MB at %.1f MB",
-                                 double(n) / 1e6, double(done) / 1e6);
                         fill(done, n, static_cast<uint8_t*>(stage.mapped));
                         done += n;
                     }
-                    nr::logf("[nr] weight upload: submitting %zu staging chunks (%.1f MB) in one queue operation",
-                             stages.size(), double(bytes) / 1e6);
                     one_shot([&](VkCommandBuffer cmd) {
                         VkDeviceSize dst = offset;
                         for (const auto& stage : stages) {
@@ -134,7 +128,6 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
                         }
                     });
                     for (auto& stage : stages) destroy(stage);
-                    nr::logf("[nr] weight upload: batched transfer completed");
                     return;
                 } catch (...) {
                     for (auto& stage : stages) destroy(stage);
@@ -148,16 +141,12 @@ new = r"""    void upload_with(Buffer& gpu, VkDeviceSize offset, VkDeviceSize by
         try {
             for (VkDeviceSize done = 0; done < bytes; done += chunk) {
                 const VkDeviceSize n = std::min(chunk, bytes - done);
-                nr::logf("[nr] weight upload: serial chunk %.1f / %.1f MB begin",
-                         double(done) / 1e6, double(bytes) / 1e6);
                 fill(done, n, static_cast<uint8_t*>(stage.mapped));
                 one_shot([&](VkCommandBuffer cmd) {
                     VkBufferCopy region{};
                     region.srcOffset = 0; region.dstOffset = offset + done; region.size = n;
                     vkCmdCopyBuffer(cmd, stage.handle, gpu.handle, 1, &region);
                 });
-                nr::logf("[nr] weight upload: serial chunk %.1f MB complete",
-                         double(done + n) / 1e6);
             }
         } catch (...) {
             destroy(stage);
@@ -171,64 +160,7 @@ p.write_text(s)
 PY
 
 
-# The weight upload can complete while the background network build stalls in
-# Vulkan pipeline creation. Emit a breadcrumb for each ACO pipeline stage even
-# without NR_ACO_DUMP, and identify the exact shader being created. This also
-# distinguishes a cache miss/driver compile from binary import.
-python3 - <<'PY'
-from pathlib import Path
-p = Path("windows/src/core/nr_pipeline_binary.hpp")
-s = p.read_text()
-old = '    const bool trace=std::getenv("NR_ACO_DUMP")!=nullptr;\n    auto step=[&](const char* s){if(trace){std::fprintf(stderr,"ACO %s: %s\\n",keyname(record.spv_hash).c_str(),s);std::fflush(stderr);}};'
-new = '    const bool trace=true;\n    auto step=[&](const char* s){if(trace){std::fprintf(stderr,"[nr] ACO pipeline %s: %s\\n",keyname(record.spv_hash).c_str(),s);std::fflush(stderr);}};'
-if old in s:
-    s = s.replace(old, new, 1)
-elif new not in s:
-    raise SystemExit("Could not enable unconditional ACO pipeline stage logs")
-# Define the logger before the cache lookup, since cache hit/miss paths use it.
-s = s.replace(new + "\n", "", 1)
-cache_marker = "    if(!cache_file.empty()) {"
-if cache_marker not in s:
-    raise SystemExit("Could not locate ACO cache lookup for diagnostic logger")
-s = s.replace(cache_marker, new + "\n" + cache_marker, 1)
-# Cache hit/miss diagnostics. Don't print full paths to avoid enormous logs.
-old = '        if(load_cached(cache_file,key,blob)) {\n            try{return import_pipeline(f,device,ci,key,blob);}catch(const std::exception&){}   // made again below\n        }'
-new = '        if(load_cached(cache_file,key,blob)) {\n            step("cached binary found; importing");\n            try { auto p=import_pipeline(f,device,ci,key,blob); step("cached binary imported"); return p; }\n            catch(const std::exception& e) { std::fprintf(stderr,"[nr] ACO cached import failed: %s; rebuilding binary\\n",e.what()); std::fflush(stderr); }\n        } else { step("cache miss; compiling template and capturing binary"); }'
-if old in s:
-    s = s.replace(old, new, 1)
-elif new not in s:
-    raise SystemExit("Could not patch ACO cache diagnostics")
-p.write_text(s)
-
-p = Path("windows/src/core/nrvk.hpp")
-s = p.read_text()
-old = '''        const std::vector<uint32_t> code = read_spirv(spirv_path);
-        VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};'''
-new = '''        const auto pipeline_t0 = std::chrono::steady_clock::now();
-        nr::logf("[nr] pipeline create begin: %s", spirv_path.substr(spirv_path.find_last_of("/\\\\") + 1).c_str());
-        const std::vector<uint32_t> code = read_spirv(spirv_path);
-        VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};'''
-if old in s:
-    s = s.replace(old, new, 1)
-elif new not in s:
-    raise SystemExit("Could not add pipeline creation begin log")
-old = '''        NRVK_CHECK(nr::binary::create_or_default(device, ctx.pipeline_cache, cpi, spirv_path,
-                                                code.data(), code.size() * 4, &pipeline, push_bytes));'''
-new = '''        const VkResult pipeline_result = nr::binary::create_or_default(device, ctx.pipeline_cache, cpi, spirv_path,
-                                                code.data(), code.size() * 4, &pipeline, push_bytes);
-        nr::logf("[nr] pipeline create %s: %s (%.1f ms)",
-                 spirv_path.substr(spirv_path.find_last_of("/\\\\") + 1).c_str(),
-                 pipeline_result == VK_SUCCESS ? "complete" : "FAILED",
-                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipeline_t0).count());
-        NRVK_CHECK(pipeline_result);'''
-if old in s:
-    s = s.replace(old, new, 1)
-elif new not in s:
-    raise SystemExit("Could not add pipeline creation completion log")
-# Ensure chrono is directly included for standalone use.
-if '#include <chrono>' not in s:
-    s = s.replace('#include <cstdint>', '#include <chrono>\n#include <cstdint>', 1)
-p.write_text(s)
+# Keep detailed ACO pipeline tracing opt-in via NR_ACO_DUMP; avoid per-pipeline log spam in normal runs.
 
 # ACO record parsing, shell loading, capture, splice or binary import can throw. Keep
 # those failures local to this shader and retry with the original SPIR-V through the driver.
