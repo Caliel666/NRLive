@@ -286,6 +286,7 @@ elif end_new in s:
 else:
     raise SystemExit("Could not add native-compiler fallback after ACO pipeline failure")
 p.write_text(s)
+PY
 
 source windows/build/arch/rdna4.sh
 python3 windows/build/generate_device_chain.py toolchain/Vulkan-Headers "$out/generated/nr_device_chain_sizes.hpp"
