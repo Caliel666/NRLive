@@ -30,10 +30,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dlssnr-source" "$RUNNER_TEMP/dlssnr-release" build/dlssnr-runtime
           curl -L --fail --retry 5 --retry-delay 3 \
-            https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.4-win-preview.zip \
+            https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.5-win-preview.zip \
             -o "$RUNNER_TEMP/dlssnr-source.zip"
           curl -L --fail --retry 5 --retry-delay 3 \
-            https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.4-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.4-win-preview-x86_64.zip \
+            https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.5-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.5-win-preview-x86_64.zip \
             -o "$RUNNER_TEMP/dlssnr-runtime.zip"
           unzip -q "$RUNNER_TEMP/dlssnr-source.zip" -d "$RUNNER_TEMP/dlssnr-source"
           unzip -q "$RUNNER_TEMP/dlssnr-runtime.zip" -d "$RUNNER_TEMP/dlssnr-release"
