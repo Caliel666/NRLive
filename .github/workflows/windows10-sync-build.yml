@@ -82,8 +82,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dlssnr-source" "$RUNNER_TEMP/dlssnr-release" build/dlssnr-runtime
-          curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.4-win-preview.zip -o "$RUNNER_TEMP/dlssnr-source.zip"
-          curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.4-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.4-win-preview-x86_64.zip -o "$RUNNER_TEMP/dlssnr-runtime.zip"
+          curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.5-win-preview.zip -o "$RUNNER_TEMP/dlssnr-source.zip"
+          curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.5-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.5-win-preview-x86_64.zip -o "$RUNNER_TEMP/dlssnr-runtime.zip"
           unzip -q "$RUNNER_TEMP/dlssnr-source.zip" -d "$RUNNER_TEMP/dlssnr-source"
           unzip -q "$RUNNER_TEMP/dlssnr-runtime.zip" -d "$RUNNER_TEMP/dlssnr-release"
           src="$(find "$RUNNER_TEMP/dlssnr-source" -type f -path '*/windows/src/core/nr_runtime.cpp' -printf '%h\n' | sed 's#/windows/src/core##' | head -n 1)"
@@ -103,8 +103,6 @@ jobs:
           test -s build/dlssnr-runtime/NRLiveDlssNrBridge.dll
           test -s build/dlssnr-runtime/dlssnr_extract_model.exe
           test -d build/dlssnr-runtime/dlssnr-amd/shaders
-          test -d build/dlssnr-runtime/dlssnr-amd/aco/records
-          test -d build/dlssnr-runtime/dlssnr-amd/aco/shaders
       - name: Upload DLSSNR runtime
         uses: actions/upload-artifact@v4
         with:
