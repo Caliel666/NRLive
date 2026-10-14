@@ -85,10 +85,13 @@ compile session windows/src/pe/nr_pe_session.cpp
 compile bridge windows/src/pe/nr_pe_bridge.cpp
 compile d3d12split windows/src/pe/nr_pe_d3d12split.cpp
 compile config windows/src/pe/nr_pe_config.cpp
+# DLSSNR-AMD 0.0.5 adds RenoDX-style processing and screenshot support to Session.
+compile renodx windows/src/core/nr_renodx.cpp
+compile screenshot windows/src/pe/nr_screenshot.cpp
 compile host_api "$repo/src/dlssnr_bridge_api.cpp"
 compile vkdevice_stub "$repo/src/dlssnr_vkdevice_stub.cpp"
 objs=("$out"/obj/*.o)
-ldflags=(-ld3d12 -ldxgi -ldwmapi -lgdi32 -lole32 -ldbghelp -ld3dcompiler -pthread -static -static-libgcc -static-libstdc++)
+ldflags=(-ld3d12 -ldxgi -ldwmapi -lgdi32 -lole32 -loleaut32 -lwindowscodecs -ldbghelp -ld3dcompiler -pthread -static -static-libgcc -static-libstdc++)
 undefined=$({ "$cxx" -shared -o /dev/null "${objs[@]}" "${ldflags[@]}" 2>&1 || true; } |
   grep -oE "undefined reference to .vk[A-Za-z0-9_]+" | sed -E "s/.*(vk[A-Za-z0-9_]+).*/\\1/" | sort -u || true)
 {
