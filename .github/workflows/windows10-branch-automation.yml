@@ -1,5 +1,7 @@
 name: Windows 10 branch automation
 # Main pushes and version tags keep the dedicated Windows 10 branch current.
+# The reusable workflow is pinned to the windows10 branch so its .NET 8 and
+# Windows 10 compatibility fixes are used for every automated sync.
 
 on:
   push:

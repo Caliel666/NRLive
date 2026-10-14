@@ -1,6 +1,8 @@
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
@@ -16,6 +18,7 @@ public partial class MainWindow : Window
     private const int ToggleHotkeyId = 0x4E52;
     private const uint ModAlt = 0x0001, ModControl = 0x0002, ModShift = 0x0004, ModWin = 0x0008, ModNoRepeat = 0x4000;
     private const int WmHotkey = 0x0312;
+    private static readonly HttpClient UpdateHttp = CreateUpdateHttpClient();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private HwndSource? _source;
     private Process? _process;
@@ -25,6 +28,7 @@ public partial class MainWindow : Window
     private bool _registeredHotkey;
     private string _currentProfile = "Default";
     private string Root => AppContext.BaseDirectory;
+    private string VersionPath => Path.Combine(Root, "version.txt");
     private string ProfilesDir => Path.Combine(Root, "profiles");
     private string UiConfigPath => Path.Combine(Root, "ui_config.json");
     private string ProfilePath(string name) => Path.Combine(ProfilesDir, SafeName(name) + ".json");
@@ -99,6 +103,9 @@ public partial class MainWindow : Window
         _source?.AddHook(WndProc);
         RegisterToggleHotkey();
         UpdatePreview();
+        VersionText.Text = $"v{ReadCurrentVersion()}";
+        // Check in the background after the window is ready; don't block startup.
+        _ = CheckForUpdatesAsync(manual: false);
     }
 
     private void ProfileBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -172,6 +179,168 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { if (notify) MessageBox.Show(this, ex.Message, "Could not save profile", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
+
+
+    private static HttpClient CreateUpdateHttpClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(7) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("NRLiveUI-Updater/1.0");
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        return client;
+    }
+
+    private string ReadCurrentVersion()
+    {
+        try
+        {
+            string version = File.ReadAllText(VersionPath).Trim();
+            if (!string.IsNullOrWhiteSpace(version)) return version;
+        }
+        catch { }
+        return "0.0.0";
+    }
+
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+        => await CheckForUpdatesAsync(manual: true);
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (!CheckUpdatesButton.IsEnabled) return;
+        CheckUpdatesButton.IsEnabled = false;
+        string oldStatus = FooterStatus.Text;
+        if (manual) FooterStatus.Text = "Checking for updates…";
+        try
+        {
+            using var response = await UpdateHttp.GetAsync(
+                "https://api.github.com/repos/Caliel666/NRLive/releases/latest",
+                HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            using var stream = await response.Content.ReadAsStreamAsync();
+            using var release = await JsonDocument.ParseAsync(stream);
+            JsonElement root = release.RootElement;
+            string tag = root.TryGetProperty("tag_name", out var tagValue) ? tagValue.GetString() ?? "" : "";
+            string latestBase = tag.TrimStart('v', 'V').Trim();
+            if (!Version.TryParse(latestBase, out Version? latestNumeric))
+            {
+                FooterStatus.Text = manual ? "Latest GitHub release has no valid version tag." : oldStatus;
+                return;
+            }
+
+            string current = ReadCurrentVersion();
+            bool isWindows10 = current.EndsWith("-win10", StringComparison.OrdinalIgnoreCase);
+            string currentBase = isWindows10 ? current[..^"-win10".Length] : current;
+            string latest = latestNumeric.ToString() + (isWindows10 ? "-win10" : "");
+            Version currentNumeric = Version.TryParse(currentBase, out Version? parsedCurrent)
+                ? parsedCurrent
+                : new Version(0, 0, 0);
+
+            if (latestNumeric <= currentNumeric)
+            {
+                if (manual) FooterStatus.Text = $"NRLive is up to date ({current}).";
+                return;
+            }
+
+            if (!root.TryGetProperty("assets", out JsonElement assets) || assets.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("The latest release has no downloadable assets.");
+            string assetName = isWindows10 ? "NRLiveUI-win10.zip" : "NRLiveUI.zip";
+            string? downloadUrl = null;
+            foreach (JsonElement asset in assets.EnumerateArray())
+            {
+                if (asset.TryGetProperty("name", out var name) &&
+                    string.Equals(name.GetString(), assetName, StringComparison.OrdinalIgnoreCase) &&
+                    asset.TryGetProperty("browser_download_url", out var url))
+                {
+                    downloadUrl = url.GetString();
+                    break;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                FooterStatus.Text = manual
+                    ? $"Version {latest} is listed, but {assetName} is not attached to its GitHub release yet."
+                    : oldStatus;
+                return;
+            }
+
+            var answer = MessageBox.Show(this,
+                $"NRLive {latest} is available. You are using {current}.\n\nDownload and install the update now?",
+                "NRLive update available", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (answer != MessageBoxResult.Yes)
+            {
+                FooterStatus.Text = $"Update available: {latest}.";
+                return;
+            }
+
+            FooterStatus.Text = $"Downloading NRLive {latest}…";
+            string tempRoot = Path.Combine(Path.GetTempPath(), "NRLive-update-" + Guid.NewGuid().ToString("N"));
+            string zipPath = Path.Combine(tempRoot, assetName);
+            string stagePath = Path.Combine(tempRoot, "package");
+            Directory.CreateDirectory(stagePath);
+            try
+            {
+                using (var download = await UpdateHttp.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+                {
+                    download.EnsureSuccessStatusCode();
+                    await using var source = await download.Content.ReadAsStreamAsync();
+                    await using var destination = new FileStream(zipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    await source.CopyToAsync(destination);
+                }
+
+                ZipFile.ExtractToDirectory(zipPath, stagePath);
+                if (!File.Exists(Path.Combine(stagePath, "NRLiveUI.exe")) ||
+                    !File.Exists(Path.Combine(stagePath, "NRLive.exe")) ||
+                    !File.Exists(Path.Combine(stagePath, "version.txt")))
+                    throw new InvalidDataException("The downloaded package is missing required NRLive files.");
+                string stagedVersion = File.ReadAllText(Path.Combine(stagePath, "version.txt")).Trim();
+                if (!string.Equals(stagedVersion, latest, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"The package version ({stagedVersion}) does not match the release ({latest}).");
+
+                string scriptPath = Path.Combine(tempRoot, "install-update.ps1");
+                string target = Root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string script = "$ErrorActionPreference = 'Stop'\n" +
+                    "$target = '" + EscapePowerShell(target) + "'\n" +
+                    "$stage = '" + EscapePowerShell(stagePath) + "'\n" +
+                    "$pidToWait = " + Environment.ProcessId + "\n" +
+                    "try {\n" +
+                    "  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }\n" +
+                    "  Get-ChildItem -LiteralPath $stage -Force | Where-Object { $_.Name -ne 'profiles' -and $_.Name -ne 'ui_config.json' } | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force }\n" +
+                    "  Start-Process -FilePath (Join-Path $target 'NRLiveUI.exe') -WorkingDirectory $target\n" +
+                    "} catch { $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'NRLive-update-error.txt') }\n" +
+                    "Start-Sleep -Seconds 2\nRemove-Item -LiteralPath '" + EscapePowerShell(tempRoot) + "' -Recurse -Force -ErrorAction SilentlyContinue\n";
+                await File.WriteAllTextAsync(scriptPath, script);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + "\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Root
+                }) ?? throw new InvalidOperationException("Could not start the update installer.");
+                FooterStatus.Text = "Update downloaded. Restarting NRLive to install…";
+                Close();
+            }
+            catch
+            {
+                try { Directory.Delete(tempRoot, recursive: true); } catch { }
+                throw;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+        {
+            FooterStatus.Text = "Couldn't connect to the network.";
+            // Non-modal by design: an offline launcher remains fully functional.
+        }
+        catch
+        {
+            FooterStatus.Text = "Update check failed; NRLive is still usable.";
+        }
+        finally
+        {
+            if (IsLoaded && IsVisible) CheckUpdatesButton.IsEnabled = true;
+        }
+    }
+
+    private static string EscapePowerShell(string value) => value.Replace("'", "''");
 
     private void SaveProfile_Click(object sender, RoutedEventArgs e) => SaveCurrentProfile(true);
 
