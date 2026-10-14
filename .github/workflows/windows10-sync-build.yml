@@ -70,7 +70,15 @@ jobs:
           if (-not (git diff --cached --quiet)) {
             git commit -m "Apply Windows 10 compatibility patches and target .NET 8"
           }
-          if ($env:SOURCE_REF -match '^refs/tags/v?(\d+\.\d+\.\d+)
+          if ($env:SOURCE_REF -match '^refs/tags/v?(\d+\.\d+\.\d+)$') {
+            $win10Version = "$($Matches[1])-win10"
+            Set-Content -Path "version.txt" -Value $win10Version -NoNewline
+            git add version.txt
+            if (-not (git diff --cached --quiet)) {
+              git commit -m "Set Windows 10 package version $win10Version"
+            }
+          }
+          git push origin HEAD:windows10
 
   dlssnr-runtime:
     needs: sync
@@ -212,7 +220,8 @@ jobs:
           }
           if (Test-Path "$package/dlssnr-amd/dlssnr.bin") { throw "The package must not redistribute model weights." }
           $packageVersion = (Get-Content "$package/version.txt" -Raw).Trim()
-          if ($packageVersion -notmatch '^\d+\.\d+\.\d+-win10
+          if ($packageVersion -notmatch '^\d+\.\d+\.\d+-win10$') { throw "Windows 10 version.txt must use the x.y.z-win10 format; found $packageVersion." }
+          if ($env:SOURCE_REF -match '^refs/tags/v?(\d+\.\d+\.\d+)$' -and $packageVersion -ne "$($Matches[1])-win10") { throw "Windows 10 package version does not match the release tag." }
           $zip = "build/NRLiveUI-win10.zip"
           Compress-Archive -Path "$package/*" -DestinationPath $zip -Force
           if (-not (Test-Path $zip)) { throw "NRLiveUI-win10.zip was not created." }
