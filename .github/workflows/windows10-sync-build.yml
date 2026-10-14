@@ -230,9 +230,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NRLive-windows10-net8-x64
-          path: |
-            build/windows10-package/**
-            build/NRLiveUI-win10.zip
+          # Upload the unpacked app as the Actions artifact. The actual release
+          # asset remains NRLiveUI-win10.zip; do not nest that ZIP in the app payload.
+          path: build/windows10-package/**
           if-no-files-found: error
 
       - name: Attach Windows 10 package to the matching GitHub release
