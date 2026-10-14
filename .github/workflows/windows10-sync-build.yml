@@ -1,6 +1,16 @@
 name: Windows 10 sync and build
 
 on:
+  push:
+    branches:
+      - windows10
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Main branch or tag to merge into windows10"
+        required: true
+        default: "main"
+        type: string
   workflow_call:
     inputs:
       source_ref:
@@ -30,7 +40,7 @@ jobs:
       - name: Merge selected main/tag revision into windows10 and reapply Windows 10 patches
         shell: pwsh
         env:
-          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_REF: ${{ inputs.source_ref || github.ref }}
         run: |
           $ErrorActionPreference = "Stop"
           git config user.name "github-actions[bot]"
