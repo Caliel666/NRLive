@@ -68,7 +68,7 @@ PY
 source windows/build/arch/rdna4.sh
 python3 windows/build/generate_device_chain.py toolchain/Vulkan-Headers "$out/generated/nr_device_chain_sizes.hpp"
 cxx=x86_64-w64-mingw32-g++
-common=(-std=c++17 -O2 -DNDEBUG -DNR_BUILD_STAMP='"NRLive-DLSSNR-0.0.4"' -DNR_LIVE_DLSSNR_BRIDGE_EXPORTS
+common=(-std=c++17 -O2 -DNDEBUG -DNR_BUILD_STAMP='"NRLive-DLSSNR-0.0.5"' -DNR_LIVE_DLSSNR_BRIDGE_EXPORTS
   -Itoolchain/Vulkan-Headers/include -Iwindows/src -Iwindows/src/core -Iwindows/src/pe
   -I"$out/generated" -I"$repo/include")
 compile() {
