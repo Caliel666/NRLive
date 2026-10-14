@@ -228,9 +228,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NRLive-windows-x64-fsr-sdk-2.3.0
-          path: |
-            build/package/**
-            build/NRLiveUI.zip
+          # Upload the unpacked app as the Actions artifact. The actual release
+          # asset remains NRLiveUI.zip; never put that ZIP inside the artifact's
+          # app payload as a nested ZIP.
+          path: build/package/**
           if-no-files-found: error
 
       - name: Publish portable package to GitHub release
