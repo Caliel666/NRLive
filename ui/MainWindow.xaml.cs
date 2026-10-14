@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private const uint ModAlt = 0x0001, ModControl = 0x0002, ModShift = 0x0004, ModWin = 0x0008, ModNoRepeat = 0x4000;
     private const int WmHotkey = 0x0312;
     private static readonly HttpClient UpdateHttp = CreateUpdateHttpClient();
+    private static readonly HttpClient UpdateDownloadHttp = CreateUpdateDownloadHttpClient();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private HwndSource? _source;
     private Process? _process;
@@ -189,6 +190,13 @@ public partial class MainWindow : Window
         return client;
     }
 
+    private static HttpClient CreateUpdateDownloadHttpClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("NRLiveUI-Updater/1.0");
+        return client;
+    }
+
     private string ReadCurrentVersion()
     {
         try
@@ -214,6 +222,11 @@ public partial class MainWindow : Window
             using var response = await UpdateHttp.GetAsync(
                 "https://api.github.com/repos/Caliel666/NRLive/releases/latest",
                 HttpCompletionOption.ResponseHeadersRead);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                FooterStatus.Text = manual ? "No NRLive release has been published yet." : oldStatus;
+                return;
+            }
             response.EnsureSuccessStatusCode();
             using var stream = await response.Content.ReadAsStreamAsync();
             using var release = await JsonDocument.ParseAsync(stream);
@@ -278,7 +291,7 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(stagePath);
             try
             {
-                using (var download = await UpdateHttp.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+                using (var download = await UpdateDownloadHttp.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
                 {
                     download.EnsureSuccessStatusCode();
                     await using var source = await download.Content.ReadAsStreamAsync();
