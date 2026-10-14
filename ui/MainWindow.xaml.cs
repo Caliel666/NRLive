@@ -321,14 +321,15 @@ public partial class MainWindow : Window
                     "} catch { $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'NRLive-update-error.txt') }\n" +
                     "Start-Sleep -Seconds 2\nRemove-Item -LiteralPath '" + EscapePowerShell(tempRoot) + "' -Recurse -Force -ErrorAction SilentlyContinue\n";
                 await File.WriteAllTextAsync(scriptPath, script);
-                Process.Start(new ProcessStartInfo
+                if (Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
                     Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + "\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WorkingDirectory = Root
-                }) ?? throw new InvalidOperationException("Could not start the update installer.");
+                }) is null)
+                    throw new InvalidOperationException("Could not start the update installer.");
                 FooterStatus.Text = "Update downloaded. Restarting NRLive to install…";
                 Close();
             }
