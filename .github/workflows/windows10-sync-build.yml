@@ -206,14 +206,39 @@ jobs:
           Copy-Item "build/dlssnr-runtime/DLSSNR-AMD-UPSTREAM-README.txt" $package -Force
           Copy-Item "build/dlssnr-runtime/dlssnr-amd" $package -Recurse -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
+          Copy-Item "version.txt" "$package/version.txt" -Force
           foreach ($file in @("NRLiveUI.exe","NRLive.exe","NRLiveDlssNrBridge.dll","dlssnr_extract_model.exe","amd_fidelityfx_loader_dx12.dll","amd_fidelityfx_framegeneration_dx12.dll","amd_fidelityfx_upscaler_dx12.dll","DLSSNR-AMD-SETUP.txt")) {
             if (-not (Test-Path (Join-Path $package $file))) { throw "Portable package is missing $file" }
           }
           if (Test-Path "$package/dlssnr-amd/dlssnr.bin") { throw "The package must not redistribute model weights." }
+          if ((Get-Content "$package/version.txt" -Raw).Trim() -ne "2.1.0-win10") { throw "Windows 10 version.txt must be 2.1.0-win10." }
+          $zip = "build/NRLiveUI-win10.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -Force
+          if (-not (Test-Path $zip)) { throw "NRLiveUI-win10.zip was not created." }
 
       - name: Upload Windows 10 package
         uses: actions/upload-artifact@v4
         with:
           name: NRLive-windows10-net8-x64
-          path: build/windows10-package/**
+          path: |
+            build/windows10-package/**
+            build/NRLiveUI-win10.zip
           if-no-files-found: error
+
+      - name: Attach Windows 10 package to the matching GitHub release
+        if: startsWith(inputs.source_ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = $env:SOURCE_REF -replace '^refs/tags/', ''
+          $ready = $false
+          for ($attempt = 0; $attempt -lt 45; $attempt++) {
+            gh release view $tag --repo Caliel666/NRLive *> $null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            Start-Sleep -Seconds 20
+          }
+          if (-not $ready) { throw "GitHub release $tag was not created by the Windows build workflow in time." }
+          gh release upload $tag build/NRLiveUI-win10.zip --repo Caliel666/NRLive --clobber
