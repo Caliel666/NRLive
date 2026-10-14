@@ -38,9 +38,9 @@ struct OverlayDlssNrConfig {
   float localTone = 1.0f;
   float maxRatio = 2.0f;
   float skinStructure = -1.0f;
-  float historyStrength = 0.8f;
+  float historyStrength = 0.2f;
   bool automaticSkinMask = true;
-  bool stabilizer = false; // motion-only residual stabilizer
+  bool stabilizer = true; // motion-only residual stabilizer
 };
 
 // ── Overlay API ───────────────────────────────────────────────────────────
