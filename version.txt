@@ -1,1 +1,1 @@
-Bump Windows 10 hotfix version to 2.1.1
+2.1.1-win10
