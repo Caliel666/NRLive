@@ -144,8 +144,6 @@ graph_replacements = [
 ('it->s->block == 30 && it->s->layer == 4 && it->kern == "gemmnores"',
  'it->s->block == vit_first - 1 && it->s->type == "CCSplitSwin16HFinalHead" && it->kern == "gemmnores"'),
 ('voff[lift_key(31)]', 'voff[lift_key(vit_first)]'),
-('host_boundary && s.block == 31 && s.layer == 0 && !in_folded',
- 'host_boundary && s.block == vit_first && s.layer == 0 && !in_folded'),
 ('uint32_t(voff[blk_out(30)]), uint32_t(voff[lift_key(vit_first)])',
  'voff[blk_out(vit_first - 1)], uint32_t(voff[lift_key(vit_first)])'),
 ('host_boundary && s.block == 38 && s.layer == 4 && d.kern == "gemmproj" &&',
