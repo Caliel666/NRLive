@@ -173,7 +173,7 @@ for old, new in graph_replacements:
     if old in ('host_boundary && s.block == 31 && s.layer == 0 &&', 'voff[lift_key(31)]', 'voff[ups_key(38)]'):
         text = graph.read_text(encoding="utf-8")
         count = text.count(old)
-        expected = 1 if old == 'host_boundary && s.block == 31 && s.layer == 0 &&' else 2
+        expected = 2
         if count != expected:
             raise SystemExit(f"nr_graph.cpp: expected {expected} occurrences of {old}, found {count}")
         graph.write_text(text.replace(old, new), encoding="utf-8", newline="")
