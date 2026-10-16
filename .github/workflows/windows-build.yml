@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "main"
+      - "feature/dlssnr-0.0.6-nvidia-model-toggle"
     tags:
       - "*"
   pull_request:
@@ -35,7 +36,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dlssnr-source" "$RUNNER_TEMP/dlssnr-release" build/dlssnr-runtime
           curl -L --fail --retry 5 --retry-delay 3 \
-            https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.5-win-preview.zip \
+            https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.6-linux-preview.zip \
             -o "$RUNNER_TEMP/dlssnr-source.zip"
           curl -L --fail --retry 5 --retry-delay 3 \
             https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.5-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.5-win-preview-x86_64.zip \
@@ -46,18 +47,34 @@ jobs:
           test -n "$src"
           mkdir -p "$src/toolchain"
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$src/toolchain/Vulkan-Headers"
+          python3 scripts/port_dlssnr_006.py "$src"
+          mkdir -p "$RUNNER_TEMP/dlssnr-small-extractor"
+          python3 "$src/windows/package/model-tools/gen_extract_tables.py" \
+            --descriptor "$src/linux/package/model-tools/descriptor-small.json" \
+            --list "$src/linux/package/model-tools/model-files-small.txt" \
+            --sums "$src/linux/package/model-tools/model-files-small.sha256" \
+            --out "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_tables.hpp"
+          cp "$src/windows/package/model-tools/dlssnr_extract_model.cpp" "$RUNNER_TEMP/dlssnr-small-extractor/"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ -municode \
+            "$src/windows/package/model-tools/dlssnr_extract_model.cpp" \
+            -o "$RUNNER_TEMP/dlssnr-extract-model.exe"
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ -municode -DNR_MODEL_SMALL \
+            "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_model.cpp" \
+            -o "$RUNNER_TEMP/dlssnr-extract-small-model.exe"
           DLSSNR_SOURCE="$src" bash scripts/build_dlssnr_bridge.sh build/dlssnr-runtime
           runtime_dir="$(find "$RUNNER_TEMP/dlssnr-release" -type d -name dlssnr-amd -print -quit)"
           tools_dir="$(find "$RUNNER_TEMP/dlssnr-release" -type d -name model-tools -print -quit)"
           test -n "$runtime_dir"
           test -n "$tools_dir"
           cp -a "$runtime_dir" build/dlssnr-runtime/
-          rm -f build/dlssnr-runtime/dlssnr-amd/dlssnr.bin
-          cp "$tools_dir/dlssnr_extract_model.exe" build/dlssnr-runtime/
+          rm -f build/dlssnr-runtime/dlssnr-amd/dlssnr.bin build/dlssnr-runtime/dlssnr-amd/dlssnr-small.bin
+          cp "$RUNNER_TEMP/dlssnr-extract-model.exe" build/dlssnr-runtime/dlssnr_extract_model.exe
+          cp "$RUNNER_TEMP/dlssnr-extract-small-model.exe" build/dlssnr-runtime/dlssnr_extract_small_model.exe
           cp "$src/LICENSE" build/dlssnr-runtime/DLSSNR-AMD-LICENSE.txt
           cp "$src/windows/package/README.txt" build/dlssnr-runtime/DLSSNR-AMD-UPSTREAM-README.txt
           test -s build/dlssnr-runtime/NRLiveDlssNrBridge.dll
           test -s build/dlssnr-runtime/dlssnr_extract_model.exe
+          test -s build/dlssnr-runtime/dlssnr_extract_small_model.exe
           test -s build/dlssnr-runtime/DLSSNR-AMD-LICENSE.txt
           test -d build/dlssnr-runtime/dlssnr-amd/shaders
           test ! -e build/dlssnr-runtime/dlssnr-amd/dlssnr.bin
@@ -167,10 +184,11 @@ jobs:
             "amd_fidelityfx_upscaler_dx12.dll",
             "NRLiveDlssNrBridge.dll",
             "dlssnr_extract_model.exe",
+            "dlssnr_extract_small_model.exe",
             "DLSSNR-AMD-LICENSE.txt",
             "DLSSNR-AMD-UPSTREAM-README.txt"
           )) {
-            $runtimePath = if ($dll -in @("NRLiveDlssNrBridge.dll", "dlssnr_extract_model.exe", "DLSSNR-AMD-LICENSE.txt", "DLSSNR-AMD-UPSTREAM-README.txt")) { "build/dlssnr-runtime/$dll" } else { "build/Release/$dll" }
+            $runtimePath = if ($dll -in @("NRLiveDlssNrBridge.dll", "dlssnr_extract_model.exe", "dlssnr_extract_small_model.exe", "DLSSNR-AMD-LICENSE.txt", "DLSSNR-AMD-UPSTREAM-README.txt")) { "build/dlssnr-runtime/$dll" } else { "build/Release/$dll" }
             if (-not (Test-Path $runtimePath)) { throw "$dll was not staged: $runtimePath" }
           }
 
@@ -191,9 +209,10 @@ jobs:
 
           # The DLSSNR runtime is a separately built, MIT-licensed Vulkan bridge.
           # NVIDIA's model weights are not redistributed; users provide nvngx_dlssnr.dll
-          # and run the upstream extractor to create dlssnr-amd/dlssnr.bin.
+          # and run the extractors to create dlssnr-amd/dlssnr.bin and dlssnr-amd/dlssnr-small.bin.
           Copy-Item "build/dlssnr-runtime/NRLiveDlssNrBridge.dll" $package -Force
           Copy-Item "build/dlssnr-runtime/dlssnr_extract_model.exe" $package -Force
+          Copy-Item "build/dlssnr-runtime/dlssnr_extract_small_model.exe" $package -Force
           Copy-Item "build/dlssnr-runtime/DLSSNR-AMD-LICENSE.txt" $package -Force
           Copy-Item "build/dlssnr-runtime/DLSSNR-AMD-UPSTREAM-README.txt" $package -Force
           Copy-Item "build/dlssnr-runtime/dlssnr-amd" $package -Recurse -Force
@@ -208,6 +227,7 @@ jobs:
             "amd_fidelityfx_upscaler_dx12.dll",
             "NRLiveDlssNrBridge.dll",
             "dlssnr_extract_model.exe",
+            "dlssnr_extract_small_model.exe",
             "DLSSNR-AMD-LICENSE.txt",
             "DLSSNR-AMD-UPSTREAM-README.txt",
             "DLSSNR-AMD-SETUP.txt"
@@ -216,6 +236,7 @@ jobs:
           }
           if (-not (Test-Path "$package/dlssnr-amd/shaders")) { throw "DLSSNR shader runtime was not packaged." }
           if (Test-Path "$package/dlssnr-amd/dlssnr.bin") { throw "The package must not redistribute NVIDIA model weights." }
+          if (Test-Path "$package/dlssnr-amd/dlssnr-small.bin") { throw "The package must not redistribute NVIDIA model weights." }
           $packageVersion = (Get-Content "$package/version.txt" -Raw).Trim()
           if ($env:GITHUB_REF -like "refs/tags/*") {
             $tagVersion = $env:GITHUB_REF_NAME -replace '^[vV]', ''

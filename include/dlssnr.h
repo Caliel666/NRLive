@@ -10,7 +10,10 @@ struct OverlayDlssNrConfig;
 class DlssNrRuntime {
 public:
   ~DlssNrRuntime() { shutdown(); }
-  bool available() { return ensureLoaded(); }
+  bool available(bool newModel = false) {
+    if (m_session && m_module && m_activeNewModel != newModel) shutdown();
+    return ensureLoaded(newModel);
+  }
   bool process(Graphics& graphics, ID3D12Resource* inputColour,
                D3D12_RESOURCE_STATES inputColourState, ID3D12Resource* outputColour,
                D3D12_RESOURCE_STATES outputColourState, ID3D12Resource* motion,
@@ -28,7 +31,7 @@ private:
       const NRLiveDlssNrSettings*, NRLiveDlssNrFlushCallback, void*);
   using ErrorFn = const char* (*)(void*);
 
-  bool ensureLoaded();
+  bool ensureLoaded(bool newModel = false);
   HMODULE m_module = nullptr;
   void* m_session = nullptr;
   CreateFn m_create = nullptr;
@@ -37,4 +40,5 @@ private:
   ErrorFn m_getError = nullptr;
   std::wstring m_error;
   bool m_reportedMissingModel = false;
+  bool m_activeNewModel = false;
 };

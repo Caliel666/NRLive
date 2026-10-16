@@ -121,6 +121,23 @@ static bool stopHotkeyDown(UINT modifiers, UINT vk)
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 {
+  // Windows Graphics Capture uses WinRT activation and frame-pool objects.
+  // Initialize the render thread's WinRT apartment before any capture object
+  // is created; without this, CreateForWindow can fail with E_INVALIDARG on
+  // systems where no earlier component happened to initialize WinRT.
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+  } catch (const winrt::hresult_error& e) {
+    if (e.code() != RPC_E_CHANGED_MODE) {
+      std::wstring message = L"WinRT initialization failed: 0x";
+      wchar_t code[16]{};
+      swprintf_s(code, L"%08lX", static_cast<unsigned long>(e.code()));
+      message += code;
+      MessageBoxW(nullptr, message.c_str(), L"NRLive", MB_ICONERROR);
+      return 1;
+    }
+  }
+
   // Keep HWND, WGC crop, and cursor coordinates in the same physical-pixel
   // space. DPI virtualization could make the cursor miss the source bounds,
   // disabling both clipping and the source-to-presentation coordinate map.
@@ -546,7 +563,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (motionReady) {
           const auto& nrSettings = overlayDlssNrConfig();
           if (nrSettings.enabled) {
-            const bool nrAvailable = dlssNr.available();
+            const bool nrAvailable = dlssNr.available(nrSettings.newModel);
             // Never let the bridge write into the capture pool's reusable texture.
             // Capture's D3D11 producer can otherwise overwrite that same resource
             // while the previous frame's D3D12/Vulkan write-back is still in flight.

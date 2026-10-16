@@ -1,18 +1,23 @@
 DLSSNR-AMD setup for NRLive
 ===========================
 
-The DLSSNR-AMD Vulkan runtime and shaders are included in this package. The model weights are not:
-upstream does not redistribute them.
+NRLive ports the DLSSNR-AMD 0.0.6 dual-model runtime to Windows. The Vulkan runtime and shaders are included.
+NVIDIA model weights are not redistributed; extract both model variants from your own compatible nvngx_dlssnr.dll 310.9.16.
 
-To install your own compatible model:
-
-1. Obtain your own NVIDIA nvngx_dlssnr.dll version 310.8.0 from a legitimate installation.
+Extract both variants from the SAME DLL:
+1. Obtain your own nvngx_dlssnr.dll version 310.9.16 from a legitimate installation. This DLL contains both the original and the newer small/fast model.
 2. From the NRLive package directory, run:
    dlssnr_extract_model.exe "C:\path\to\nvngx_dlssnr.dll" "dlssnr-amd\dlssnr.bin"
-3. Wait for the extractor to verify the model and finish writing dlssnr.bin.
+   dlssnr_extract_small_model.exe "C:\path\to\nvngx_dlssnr.dll" "dlssnr-amd\dlssnr-small.bin"
+3. Wait for each extractor to verify its model weights and finish writing its output. Both commands use the same DLL, but each validates a different model's expected weight files.
 4. Start NRLive, open the overlay, click NR, then open Settings > DLSSNR.
-5. Enable DLSSNR. It will process the captured render-resolution image before FSR and use NRLive's current motion-vector texture.
+5. Use the model button to choose Original or New / Fast. Changing models rebuilds the network.
+   The new model is faster and can produce a slightly different picture. INT4 mixed is only supported by the original model path.
 
-The first use can spend extra time compiling the neural network. Let the build finish before judging performance. The runtime is experimental and currently targets AMD RDNA4 GPUs. Keep anti-cheat protected online games closed while testing injected or external graphics tools.
+The original and new model weights are extracted into separate files because their network layouts differ. Do not rename one output to the other or copy one model file over the other.
 
-If the model file or runtime is missing, NRLive should leave the captured frame unchanged and continue its regular FSR/FG pipeline. Logs are written to NRLive.log and the upstream runtime log.
+The runtime uses NRLive's current motion-vector texture and processes the captured render-resolution image before FSR.
+The first use can spend extra time compiling the neural network. Let the build finish before judging performance.
+This is experimental and currently targets AMD RDNA4 GPUs. Keep anti-cheat protected online games closed while testing injected or external graphics tools.
+
+If a selected model file or runtime is missing, NRLive leaves the captured frame unchanged and reports the missing file.
