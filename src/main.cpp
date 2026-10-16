@@ -546,7 +546,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (motionReady) {
           const auto& nrSettings = overlayDlssNrConfig();
           if (nrSettings.enabled) {
-            const bool nrAvailable = dlssNr.available();
+            const bool nrAvailable = dlssNr.available(nrSettings.newModel);
             // Never let the bridge write into the capture pool's reusable texture.
             // Capture's D3D11 producer can otherwise overwrite that same resource
             // while the previous frame's D3D12/Vulkan write-back is still in flight.
