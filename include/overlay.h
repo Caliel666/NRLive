@@ -29,6 +29,7 @@ struct OverlayFrameLimitConfig {
 
 struct OverlayDlssNrConfig {
   bool enabled = false;
+  bool newModel = false; // 310.9.16 model; requires dlssnr-amd/dlssnr-small.bin
   float modelScale = 1.0f;
   int style = 0; // 0=Neutral, 1=Natural, 2=Cinematic
   float structure = 1.0f;
