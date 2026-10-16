@@ -530,7 +530,7 @@ static void setSettingsTab(HWND h, bool dlssNr) {
   for (int id : generalIds)
     if (HWND control = GetDlgItem(h, id))
       ShowWindow(control, dlssNr ? SW_HIDE : SW_SHOW);
-  for (int id = 510; id <= 522; ++id)
+  for (int id = 510; id <= 523; ++id)
     if (HWND control = GetDlgItem(h, id))
       ShowWindow(control, dlssNr ? SW_SHOW : SW_HIDE);
 }
