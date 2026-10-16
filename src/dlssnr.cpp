@@ -23,14 +23,16 @@ std::wstring appDirectory() {
 }
 }
 
-bool DlssNrRuntime::ensureLoaded() {
+bool DlssNrRuntime::ensureLoaded(bool newModel) {
   if (m_session && m_module) return true;
   const std::filesystem::path root(appDirectory());
-  const auto model = root / L"dlssnr-amd" / L"dlssnr.bin";
+  const auto model = root / L"dlssnr-amd" / (newModel ? L"dlssnr-small.bin" : L"dlssnr.bin");
   const auto bridge = root / L"NRLiveDlssNrBridge.dll";
   if (!std::filesystem::is_regular_file(model)) {
     if (!m_reportedMissingModel) {
-      m_error = L"DLSSNR needs dlssnr-amd\\dlssnr.bin. Use the upstream extractor with your own compatible nvngx_dlssnr.dll.";
+      m_error = newModel
+          ? L"The new DLSSNR model needs dlssnr-amd\\dlssnr-small.bin. Extract both models from your own nvngx_dlssnr.dll 310.9.16."
+          : L"DLSSNR needs dlssnr-amd\\dlssnr.bin. Use the upstream extractor with your own compatible nvngx_dlssnr.dll.";
       m_reportedMissingModel = true;
     }
     return false;
@@ -49,12 +51,14 @@ bool DlssNrRuntime::ensureLoaded() {
     FreeLibrary(m_module); m_module = nullptr;
     return false;
   }
+  SetEnvironmentVariableW(L"DLSSNR_MODEL", newModel ? L"small" : L"original");
   m_session = m_create(root.c_str());
   if (!m_session) {
     m_error = L"DLSSNR runtime session could not be initialized.";
     FreeLibrary(m_module); m_module = nullptr;
     return false;
   }
+  m_activeNewModel = newModel;
   m_error.clear();
   return true;
 }
@@ -64,7 +68,9 @@ bool DlssNrRuntime::process(Graphics& graphics, ID3D12Resource* inputColour,
                             D3D12_RESOURCE_STATES outputColourState, ID3D12Resource* motion,
                             D3D12_RESOURCE_STATES motionState, bool reset,
                             const OverlayDlssNrConfig& settings) {
-  if (!settings.enabled || !inputColour || !outputColour || !motion || !ensureLoaded()) return false;
+  if (!settings.enabled || !inputColour || !outputColour || !motion) return false;
+  if (m_session && m_module && m_activeNewModel != settings.newModel) shutdown();
+  if (!ensureLoaded(settings.newModel)) return false;
 
   NRLiveDlssNrSettings s{};
   s.enabled = settings.enabled ? 1 : 0;
