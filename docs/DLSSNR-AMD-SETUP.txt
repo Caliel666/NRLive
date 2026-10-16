@@ -2,24 +2,22 @@ DLSSNR-AMD setup for NRLive
 ===========================
 
 NRLive ports the DLSSNR-AMD 0.0.6 dual-model runtime to Windows. The Vulkan runtime and shaders are included.
-NVIDIA model weights are not redistributed; extract them from your own compatible NVIDIA DLL.
+NVIDIA model weights are not redistributed; extract both model variants from your own compatible nvngx_dlssnr.dll 310.9.16.
 
-For both models (recommended):
-1. Obtain your own nvngx_dlssnr.dll version 310.9.16 from a legitimate installation.
+Extract both variants from the SAME DLL:
+1. Obtain your own nvngx_dlssnr.dll version 310.9.16 from a legitimate installation. This DLL contains both the original and the newer small/fast model.
 2. From the NRLive package directory, run:
    dlssnr_extract_model.exe "C:\path\to\nvngx_dlssnr.dll" "dlssnr-amd\dlssnr.bin"
    dlssnr_extract_small_model.exe "C:\path\to\nvngx_dlssnr.dll" "dlssnr-amd\dlssnr-small.bin"
-3. Wait for each extractor to verify the weights and finish writing its model file.
+3. Wait for each extractor to verify its model weights and finish writing its output. Both commands use the same DLL, but each validates a different model's expected weight files.
 4. Start NRLive, open the overlay, click NR, then open Settings > DLSSNR.
-5. Use the model button to choose New (310.9.16) or Original (310.8.0). Changing models rebuilds the network.
-   The new model is faster, but it can produce a slightly different picture. INT4 mixed remains an old-model-only option.
+5. Use the model button to choose Original or New / Fast. Changing models rebuilds the network.
+   The new model is faster and can produce a slightly different picture. INT4 mixed is only supported by the original model path.
 
-For the original model only:
-- A 310.8.0 DLL is accepted by dlssnr_extract_model.exe and produces dlssnr-amd\dlssnr.bin.
-- The new-model extractor requires 310.9.16. The New model choice requires dlssnr-amd\dlssnr-small.bin.
+The original and new model weights are extracted into separate files because their network layouts differ. Do not rename one output to the other or copy one model file over the other.
 
 The runtime uses NRLive's current motion-vector texture and processes the captured render-resolution image before FSR.
 The first use can spend extra time compiling the neural network. Let the build finish before judging performance.
 This is experimental and currently targets AMD RDNA4 GPUs. Keep anti-cheat protected online games closed while testing injected or external graphics tools.
 
-If the selected model file or runtime is missing, NRLive leaves the captured frame unchanged and reports the missing file.
+If a selected model file or runtime is missing, NRLive leaves the captured frame unchanged and reports the missing file.
