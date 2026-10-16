@@ -31,7 +31,7 @@ replace_once(runtime_h,
 replace_once(runtime_h,
     '    float model_scale = 1.0f;\n',
     '    float model_scale = 1.0f;\n'
-    '    // -1 follows DLSSNR_MODEL / [Network] Model; 0 = original 310.8 model, 1 = new 310.9 model.\n'
+    '    // -1 follows DLSSNR_MODEL / [Network] Model; 0 = original model, 1 = new/fast model.\n'
     '    int network = -1;\n',
     "runtime network config")
 replace_once(runtime_h,
@@ -80,13 +80,13 @@ model_select = anchor + (
     '        std::error_code ec;\n'
     '        const char* missing = network != NetworkModel::Small ? nullptr\n'
     '            : !installed ? "not an installed tree"\n'
-    '            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (extract from nvngx_dlssnr.dll 310.9.16)"\n'
+    '            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (extract both models from nvngx_dlssnr.dll 310.9.16)"\n'
     '            : nullptr;\n'
     '        if (missing) {\n'
     '            nr::logf("[nr] small model requested but %s: using original model", missing);\n'
     '            network = NetworkModel::Original;\n'
     '        } else {\n'
-    '            nr::logf("[nr] %s model selected", network == NetworkModel::Small ? "new 310.9.16" : "original 310.8.0");\n'
+    '            nr::logf("[nr] %s model selected", network == NetworkModel::Small ? "new/fast" : "original");\n'
     '        }\n'
     '    }\n'
     '    impl_->network = network;\n'
