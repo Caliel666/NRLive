@@ -55,6 +55,12 @@ jobs:
             --sums "$src/linux/package/model-tools/model-files-small.sha256" \
             --out "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_tables.hpp"
           cp "$src/windows/package/model-tools/dlssnr_extract_model.cpp" "$RUNNER_TEMP/dlssnr-small-extractor/"
+          # The 310.9.16 DLL embeds both the original and small/fast models.
+          # Both extractors must accept this same DLL; their embedded layer tables
+          # and per-weight SHA-256 checks still validate each model independently.
+          sed -i 's/e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e/2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f/' \
+            "$src/windows/package/model-tools/dlssnr_extract_model.cpp" \
+            "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_model.cpp"
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ -municode \
             "$src/windows/package/model-tools/dlssnr_extract_model.cpp" \
             -o "$RUNNER_TEMP/dlssnr-extract-model.exe"
