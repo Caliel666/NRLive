@@ -28,7 +28,7 @@ private:
       const NRLiveDlssNrSettings*, NRLiveDlssNrFlushCallback, void*);
   using ErrorFn = const char* (*)(void*);
 
-  bool ensureLoaded();
+  bool ensureLoaded(bool newModel = false);
   HMODULE m_module = nullptr;
   void* m_session = nullptr;
   CreateFn m_create = nullptr;
@@ -37,4 +37,5 @@ private:
   ErrorFn m_getError = nullptr;
   std::wstring m_error;
   bool m_reportedMissingModel = false;
+  bool m_activeNewModel = false;
 };
