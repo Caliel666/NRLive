@@ -82,6 +82,7 @@ static void loadCfg() {
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
+  g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
   g_dlssNr.style = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"style", 0, ini.c_str()), 0, 2);
   g_dlssNr.intensity = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"intensity", 100, ini.c_str()), 0, 200) / 100.0f;
@@ -132,6 +133,7 @@ static void saveCfg() {
   swprintf_s(limitValue, L"%d", g_frameLimit.method); WritePrivateProfileStringW(L"FrameLimiter", L"method", limitValue, ini.c_str());
   WritePrivateProfileStringW(L"FrameGeneration", L"enabled", g_fgEnabled ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"enabled", g_dlssNr.enabled ? L"1" : L"0", ini.c_str());
+  WritePrivateProfileStringW(L"DLSSNR", L"model", g_dlssNr.newModel ? L"1" : L"0", ini.c_str());
   wchar_t nrValue[32]{};
   swprintf_s(nrValue, L"%d", (int)std::lround(g_dlssNr.modelScale * 100)); WritePrivateProfileStringW(L"DLSSNR", L"scale", nrValue, ini.c_str());
   swprintf_s(nrValue, L"%d", g_dlssNr.style); WritePrivateProfileStringW(L"DLSSNR", L"style", nrValue, ini.c_str());
@@ -432,6 +434,7 @@ static void paintSettings(HWND h, HDC dc) {
     swprintf_s(value, L"Highlight guard (max ratio): %.2f", g_dlssNr.maxRatio); drawText(dc, value, 24, 422, 13, C_TEXT, false);
     drawText(dc, L"Colour 0 preserves source chroma; 1 uses neural chroma.", 24, 676, 10, C_DIM, false);
     drawText(dc, L"Model weights are not included; see the DLSSNR setup instructions.", 24, 692, 10, C_DIM, false);
+     drawText(dc, L"New model requires weights extracted from NVIDIA DLL 310.9.16.", 24, 652, 10, C_DIM, false);
     drawText(dc, g_saveStatus.c_str(), 24, 712, 10, C_MUTED, false);
     return;
   }
@@ -571,6 +574,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case 510: drawOwnerButton(dis, g_dlssNr.style == 0 ? L"Style: Neutral" : g_dlssNr.style == 1 ? L"Style: Natural" : L"Style: Cinematic", true); return TRUE;
       case 516: drawOwnerButton(dis, L"Automatic skin mask", g_dlssNr.automaticSkinMask); return TRUE;
       case 517: drawOwnerButton(dis, L"Residual stabilizer (motion-only)", g_dlssNr.stabilizer); return TRUE;
+       case 523: drawOwnerButton(dis, g_dlssNr.newModel ? L"Model: New (310.9.16)" : L"Model: Original (310.8.0)", g_dlssNr.newModel); return TRUE;
       case 520: {
         HDC dc = dis->hDC; RECT r = dis->rcItem;
         HBRUSH bg = CreateSolidBrush(C_RED); FillRect(dc, &r, bg); DeleteObject(bg);
@@ -650,9 +654,10 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g_dlssNr.style = (g_dlssNr.style + 1) % 3;
       saveCfg(); InvalidateRect(h, nullptr, FALSE); return 0;
     }
-    if (LOWORD(w) == 516 || LOWORD(w) == 517) {
+    if (LOWORD(w) == 516 || LOWORD(w) == 517 || LOWORD(w) == 523) {
       if (LOWORD(w) == 516) g_dlssNr.automaticSkinMask = !g_dlssNr.automaticSkinMask;
-      else g_dlssNr.stabilizer = !g_dlssNr.stabilizer;
+      else if (LOWORD(w) == 517) g_dlssNr.stabilizer = !g_dlssNr.stabilizer;
+      else { g_dlssNr.newModel = !g_dlssNr.newModel; g_toggleDlssNr = true; }
       saveCfg(); InvalidateRect(h, nullptr, FALSE); return 0;
     }
     if (LOWORD(w) >= 101 && LOWORD(w) <= 106) {
@@ -809,6 +814,7 @@ bool overlayInit(HINSTANCE inst, HWND output) {
      makeNrSlider(522, 518, 0, 100, (int)std::lround(g_dlssNr.colorStrength * 100));
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 568, 200, 22, g_settings, (HMENU)516, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 598, 300, 22, g_settings, (HMENU)517, inst, nullptr);
+     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 628, 230, 22, g_settings, (HMENU)523, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 110, 84, 100, 22, g_settings, (HMENU)102, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 216, 84, 80, 22, g_settings, (HMENU)103, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 302, 84, 100, 22, g_settings, (HMENU)104, inst, nullptr);
