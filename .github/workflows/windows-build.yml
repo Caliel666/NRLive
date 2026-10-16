@@ -55,10 +55,10 @@ jobs:
             --sums "$src/linux/package/model-tools/model-files-small.sha256" \
             --out "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_tables.hpp"
           cp "$src/windows/package/model-tools/dlssnr_extract_model.cpp" "$RUNNER_TEMP/dlssnr-small-extractor/"
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 -municode \
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ -municode \
             "$src/windows/package/model-tools/dlssnr_extract_model.cpp" \
             -o "$RUNNER_TEMP/dlssnr-extract-model.exe"
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 -municode -DNR_MODEL_SMALL \
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ -municode -DNR_MODEL_SMALL \
             "$RUNNER_TEMP/dlssnr-small-extractor/dlssnr_extract_model.cpp" \
             -o "$RUNNER_TEMP/dlssnr-extract-small-model.exe"
           DLSSNR_SOURCE="$src" bash scripts/build_dlssnr_bridge.sh build/dlssnr-runtime
@@ -209,7 +209,7 @@ jobs:
 
           # The DLSSNR runtime is a separately built, MIT-licensed Vulkan bridge.
           # NVIDIA's model weights are not redistributed; users provide nvngx_dlssnr.dll
-          # and run the upstream extractor to create dlssnr-amd/dlssnr.bin.
+          # and run the extractors to create dlssnr-amd/dlssnr.bin and dlssnr-amd/dlssnr-small.bin.
           Copy-Item "build/dlssnr-runtime/NRLiveDlssNrBridge.dll" $package -Force
           Copy-Item "build/dlssnr-runtime/dlssnr_extract_model.exe" $package -Force
           Copy-Item "build/dlssnr-runtime/dlssnr_extract_small_model.exe" $package -Force
@@ -236,6 +236,7 @@ jobs:
           }
           if (-not (Test-Path "$package/dlssnr-amd/shaders")) { throw "DLSSNR shader runtime was not packaged." }
           if (Test-Path "$package/dlssnr-amd/dlssnr.bin") { throw "The package must not redistribute NVIDIA model weights." }
+          if (Test-Path "$package/dlssnr-amd/dlssnr-small.bin") { throw "The package must not redistribute NVIDIA model weights." }
           $packageVersion = (Get-Content "$package/version.txt" -Raw).Trim()
           if ($env:GITHUB_REF -like "refs/tags/*") {
             $tagVersion = $env:GITHUB_REF_NAME -replace '^[vV]', ''
