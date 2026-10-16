@@ -434,7 +434,7 @@ static void paintSettings(HWND h, HDC dc) {
     swprintf_s(value, L"Highlight guard (max ratio): %.2f", g_dlssNr.maxRatio); drawText(dc, value, 24, 422, 13, C_TEXT, false);
     drawText(dc, L"Colour 0 preserves source chroma; 1 uses neural chroma.", 24, 676, 10, C_DIM, false);
     drawText(dc, L"Model weights are not included; see the DLSSNR setup instructions.", 24, 692, 10, C_DIM, false);
-     drawText(dc, L"New model requires weights extracted from NVIDIA DLL 310.9.16.", 24, 652, 10, C_DIM, false);
+     drawText(dc, L"Extract both models from the same NVIDIA DLL 310.9.16.", 24, 652, 10, C_DIM, false);
     drawText(dc, g_saveStatus.c_str(), 24, 712, 10, C_MUTED, false);
     return;
   }
@@ -574,7 +574,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case 510: drawOwnerButton(dis, g_dlssNr.style == 0 ? L"Style: Neutral" : g_dlssNr.style == 1 ? L"Style: Natural" : L"Style: Cinematic", true); return TRUE;
       case 516: drawOwnerButton(dis, L"Automatic skin mask", g_dlssNr.automaticSkinMask); return TRUE;
       case 517: drawOwnerButton(dis, L"Residual stabilizer (motion-only)", g_dlssNr.stabilizer); return TRUE;
-       case 523: drawOwnerButton(dis, g_dlssNr.newModel ? L"Model: New (310.9.16)" : L"Model: Original (310.8.0)", g_dlssNr.newModel); return TRUE;
+       case 523: drawOwnerButton(dis, g_dlssNr.newModel ? L"Model: New / Fast" : L"Model: Original", g_dlssNr.newModel); return TRUE;
       case 520: {
         HDC dc = dis->hDC; RECT r = dis->rcItem;
         HBRUSH bg = CreateSolidBrush(C_RED); FillRect(dc, &r, bg); DeleteObject(bg);
