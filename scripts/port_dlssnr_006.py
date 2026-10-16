@@ -146,11 +146,10 @@ graph_replacements = [
 ('voff[lift_key(31)]', 'voff[lift_key(vit_first)]'),
 ('host_boundary && s.block == 31 && s.layer == 0 && !in_folded',
  'host_boundary && s.block == vit_first && s.layer == 0 && !in_folded'),
-('voff[blk_out(30)], uint32_t(voff[lift_key(31)])',
+('uint32_t(voff[blk_out(30)]), uint32_t(voff[lift_key(31)])',
  'voff[blk_out(vit_first - 1)], uint32_t(voff[lift_key(vit_first)])'),
 ('host_boundary && s.block == 38 && s.layer == 4 && d.kern == "gemmproj" &&',
  'host_boundary && s.block == vit_last && s.layer == vit_last_layer && d.kern == "gemmproj" &&'),
-('!(s.block == 38 && s.layer == 4)', '!(s.block == vit_last && s.layer == vit_last_layer)'),
 ('voff[ups_key(38)]', 'voff[ups_key(vit_last)]'),
 ('host_boundary && s.block == 38 && s.layer == 4 && !out_folded',
  'host_boundary && s.block == vit_last && s.layer == vit_last_layer && !out_folded'),
@@ -171,7 +170,15 @@ graph_replacements = [
 ('pool_key(s2.block) : lift_key(31)', 'pool_key(s2.block) : lift_key(vit_first)'),
 ]
 for old, new in graph_replacements:
-    replace_once(graph, old, new, "dynamic ViT graph boundary: " + old[:55])
+    if old in ('host_boundary && s.block == 31 && s.layer == 0 &&', 'voff[lift_key(31)]', 'voff[ups_key(38)]'):
+        text = graph.read_text(encoding="utf-8")
+        count = text.count(old)
+        expected = 1 if old == 'host_boundary && s.block == 31 && s.layer == 0 &&' else 2
+        if count != expected:
+            raise SystemExit(f"nr_graph.cpp: expected {expected} occurrences of {old}, found {count}")
+        graph.write_text(text.replace(old, new), encoding="utf-8", newline="")
+    else:
+        replace_once(graph, old, new, "dynamic ViT graph boundary: " + old[:55])
 
 # Make the Windows extractor able to build either model from a 310.9.16 DLL.
 extractor = tools / "dlssnr_extract_model.cpp"
