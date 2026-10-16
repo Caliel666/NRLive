@@ -233,9 +233,4 @@ replace_once(extractor,
     '        throw Failure("The original model extractor requires nvngx_dlssnr.dll 310.8.0 or 310.9.16 (SHA256 " + got + ").");\n'
     '#endif',
     "model DLL hash validation")
-replace_once(extractor,
-    '    const char* want_resource = "WEIGHTS_HT";',
-    '    const char* want_resource = "WEIGHTS_HT";',
-    "noop guard")
-
 print("Ported 0.0.6 dual-model plan/runtime and model extractor support into the Windows source tree.")
