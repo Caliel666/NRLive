@@ -151,7 +151,7 @@ graph_replacements = [
 ('voff[ups_key(38)]', 'voff[ups_key(vit_last)]'),
 ('host_boundary && s.block == 38 && s.layer == 4 && !out_folded',
  'host_boundary && s.block == vit_last && s.layer == vit_last_layer && !out_folded'),
-('voff[key_of(38,4)], uint32_t(voff[ups_key(vit_last)])',
+('uint32_t(voff[key_of(38,4)]), uint32_t(voff[ups_key(vit_last)])',
  'voff[key_of(vit_last,vit_last_layer)], uint32_t(voff[ups_key(vit_last)])'),
 ('if (j == i) { out.push_back(std::move(disp[i])); i = j + 1; continue; }',
  '// A one-layer run can still fold a downsample or upsample into that layer.\n'
