@@ -3,6 +3,9 @@ project(NRLive LANGUAGES CXX)
 include(CTest)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+  add_compile_options(/utf-8) # sources are UTF-8 (HUD uses symbols such as the degree sign)
+endif()
 
 # AMD FSR SDK 2.3.0. Headers come from the SDK source archive; signed runtime
 # providers come from the release's prebuilt package.

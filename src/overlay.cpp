@@ -243,13 +243,13 @@ static void paintTopBar(HWND h, HDC dc) {
 struct HudItem { const wchar_t* name; bool OverlayHudConfig::* field; };
 static const HudItem kHudItems[] = {
   {L"Title", &OverlayHudConfig::title}, {L"FPS", &OverlayHudConfig::fps},
-  {L"Source / generated", &OverlayHudConfig::fps_detail}, {L"Frametime", &OverlayHudConfig::frametime},
+  {L"Src / gen FPS", &OverlayHudConfig::fps_detail}, {L"Frametime", &OverlayHudConfig::frametime},
   {L"Frametime graph", &OverlayHudConfig::frame_timing}, {L"1% / 0.1% lows", &OverlayHudConfig::lows},
   {L"GPU load", &OverlayHudConfig::gpu_load}, {L"GPU clock", &OverlayHudConfig::gpu_clock},
   {L"GPU temp", &OverlayHudConfig::gpu_temp}, {L"VRAM", &OverlayHudConfig::vram},
   {L"CPU load", &OverlayHudConfig::cpu_load}, {L"RAM", &OverlayHudConfig::ram},
   {L"FSR / NR / FG", &OverlayHudConfig::pipeline}, {L"GPU pass times", &OverlayHudConfig::gpu_times},
-  {L"Latency", &OverlayHudConfig::latency}, {L"Resolution", &OverlayHudConfig::resolution},
+  {L"NRLive latency", &OverlayHudConfig::latency}, {L"Resolution", &OverlayHudConfig::resolution},
   {L"Clock", &OverlayHudConfig::clock},
 };
 static constexpr int kHudItemCount = (int)(sizeof(kHudItems) / sizeof(kHudItems[0]));
@@ -744,10 +744,14 @@ bool overlayInit(HINSTANCE inst, HWND output) {
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 168, 380, 140, 22, g_settings, (HMENU)(INT_PTR)ID_OUTLINE, inst, nullptr);
     for (int i = 0; i < 5; ++i) {
       const int y = kHudSliderY + i * kHudSliderStep;
-      CreateWindowW(L"STATIC", kHudSliders[i].label, WS_CHILD|SS_LEFT, 24, y + 4, 110, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_LABEL+i), inst, nullptr);
+      static HFONT labelFont = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      HWND label = CreateWindowW(L"STATIC", kHudSliders[i].label, WS_CHILD|SS_LEFT, 24, y + 4, 110, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_LABEL+i), inst, nullptr);
+      SendMessageW(label, WM_SETFONT, (WPARAM)labelFont, FALSE);
       HWND sl = CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|TBS_NOTICKS, 134, y, 266, 26, g_settings, (HMENU)(INT_PTR)(ID_SLIDER+i), inst, nullptr);
       SendMessageW(sl, TBM_SETRANGE, TRUE, MAKELONG(kHudSliders[i].lo, kHudSliders[i].hi));
-      CreateWindowW(L"STATIC", L"", WS_CHILD|SS_RIGHT, 402, y + 4, 52, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_VALUE+i), inst, nullptr);
+      HWND value = CreateWindowW(L"STATIC", L"", WS_CHILD|SS_RIGHT, 402, y + 4, 52, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_VALUE+i), inst, nullptr);
+      SendMessageW(value, WM_SETFONT, (WPARAM)labelFont, FALSE);
     }
     for (int i = 0; i < 3; ++i)
       CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24 + i*144, 626, 130, 26, g_settings, (HMENU)(INT_PTR)(ID_COLOR+i), inst, nullptr);

@@ -272,7 +272,7 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
     W = x + pad;
     H = (c.fps ? bigH : lineH) + pad;
   } else {
-    float maxW = 150 * s;
+    float maxW = rows.size() > 1 ? 150 * s : 0; // a lone FPS row stays compact
     for (auto& r : rows) {
       if (r.kind == Row::Title) { r.h = titleH; continue; }
       if (r.kind == Row::Graph) { r.h = graphH + 4 * s; continue; }
@@ -356,7 +356,11 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
     if (graphN < 2) return;
     float mx = 0, mn = 1e9f;
     for (int i = 0; i < graphN; ++i) { mx = std::max(mx, graph[i]); mn = std::min(mn, graph[i]); }
-    const float top = std::max(8.0f, mx * 1.15f);
+    // Keep the typical frame near the middle, like MangoHud, and spikes visible.
+    float avg = 0;
+    for (int i = 0; i < graphN; ++i) avg += graph[i];
+    avg /= graphN;
+    const float top = std::max({ 8.0f, mx * 1.1f, avg * 2.0f });
     std::vector<PointF> pts;
     pts.reserve(graphN + 2);
     for (int i = 0; i < graphN; ++i)
@@ -444,10 +448,10 @@ LRESULT CALLBACK hudProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
-POINT placement(const OverlayHudConfig& c, SIZE sz) {
+POINT placement(const OverlayHudConfig& c, SIZE sz, float s) {
   RECT o{};
   GetWindowRect(g_output, &o);
-  const int m = (int)std::lround(12 * c.scale / 100.0);
+  const int m = (int)std::lround(12 * s);
   POINT p{ o.left + m, o.top + m };
   const int right = o.right - sz.cx - m, bottom = o.bottom - sz.cy - m;
   const int centre = o.left + ((o.right - o.left) - sz.cx) / 2;
@@ -551,11 +555,13 @@ void threadMain(HANDLE ready) {
       if (refresh || !shown || (cfg.frame_timing && now - lastDraw >= kGraphFrameMs)) {
         lastDraw = now;
         LARGE_INTEGER t0, t1; QueryPerformanceCounter(&t0);
-        R.fonts(cfg.scale);
+        // Scale is relative to a 96 DPI monitor, like the rest of Windows.
+        const UINT dpi = GetDpiForWindow(g_output);
+        R.fonts(cfg.scale * (int)(dpi ? dpi : 96) / 96);
         view.drawMs = (float)drawMsEma;
         SIZE sz = draw(R, cfg, view, graph.data(), (int)graph.size());
         if (sz.cx > 0) {
-          POINT dst = placement(cfg, sz), src{ 0, 0 };
+          POINT dst = placement(cfg, sz, R.s), src{ 0, 0 };
           BLENDFUNCTION blend{ AC_SRC_OVER, 0, (BYTE)std::lround(cfg.opacity * 255), AC_SRC_ALPHA };
           UpdateLayeredWindow(hud, nullptr, &dst, &sz, R.dc, &src, 0, &blend, ULW_ALPHA);
           if (!shown) { SetWindowPos(hud, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); shown = true; }

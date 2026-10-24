@@ -854,8 +854,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         hs.output = display;
         hs.fsr = usedFsr;
         hs.nr = nrOutputForFrame != nullptr;
-        if (const int64_t t = cap.lastFrameTime100ns())
-          hs.latencyMs = (float)((renderEnd.QuadPart * 10000000.0 / double(freq.QuadPart) - (double)t) / 10000.0);
+        // NRLive's own share of the latency: frame acquired -> handed to present.
+        hs.latencyMs = (float)((renderEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart));
         const auto& gt = gpuTimer.latest();
         hs.gpuMotionMs = gt.motion; hs.gpuNrMs = gt.nr; hs.gpuFsrMs = gt.fsr; hs.gpuTotalMs = gt.total;
         overlayUpdate(hs);

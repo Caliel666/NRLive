@@ -24,7 +24,7 @@ public partial class HudSettingsWindow : Window
         ("frametime", "Frametime", true), ("frame_timing", "Frametime graph", true), ("lows", "1% / 0.1% lows", true),
         ("gpu_load", "GPU load", true), ("gpu_clock", "GPU clock", false), ("gpu_temp", "GPU temperature", true),
         ("vram", "VRAM", true), ("cpu_load", "CPU load", true), ("ram", "RAM", false),
-        ("pipeline", "FSR / NR / FG state", true), ("gpu_times", "GPU pass times", false), ("latency", "Capture latency", false),
+        ("pipeline", "FSR / NR / FG state", true), ("gpu_times", "GPU pass times", false), ("latency", "NRLive latency", false),
         ("resolution", "Resolution in / out", true), ("clock", "Clock", false),
     };
 
@@ -44,7 +44,7 @@ public partial class HudSettingsWindow : Window
         _ini = iniPath;
         foreach (var (key, label, _) in Items)
         {
-            var box = new CheckBox { Content = label, Width = 186, Margin = new Thickness(0, 0, 0, 10) };
+            var box = new CheckBox { Content = label, Width = 172, Margin = new Thickness(0, 0, 0, 10) };
             box.Click += (_, _) => { if (!_loading) { _preset = 0; UpdatePresetHint(); } };
             _items[key] = box;
             ItemsPanel.Children.Add(box);
