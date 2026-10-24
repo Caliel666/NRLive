@@ -252,23 +252,33 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     DlssNrStabilizer dlssNrStabilizer;
     std::wstring lastDlssNrError;
     bool lastDlssNrStabilizerEnabled = false;
+
+    // The upscaler. FFX ones get a context; "none" keeps motion and DLSSNR
+    // running and stretches the result to the output with the blit.
+    const UpscalerInfo& upscalerChoice = upscalerInfo(spec.upscaler);
     Fsr fsr;
-    bool fsrOk = fsr.init(gfx.device(), display, display);
-    logMain(fsrOk ? L"FSR upscaler init OK: " + fsr.lastError() : L"FSR upscaler init FAILED: " + fsr.lastError());
-    bool fsrEnabled = fsrOk;
+    bool fsrOk = upscalerChoice.ffx && fsr.init(gfx.device(), display, display, upscalerChoice);
+    const bool pipelineOk = fsrOk || !upscalerChoice.ffx;
+    if (upscalerChoice.ffx)
+      logMain(std::wstring(upscalerChoice.label) + (fsrOk ? L" upscaler init OK: " : L" upscaler init FAILED: ") + fsr.lastError());
+    else
+      logMain(L"Upscaler: native scaling (no FFX upscaler)");
+    bool fsrEnabled = pipelineOk;
     if (cliMode && hasConsole()) {
-      if (fsrOk) printCli(L"FSR OK: " + fsr.lastError());
-      else       printCli(L"FSR FAIL (raw capture only): " + fsr.lastError());
+      if (!upscalerChoice.ffx) printCli(L"Upscaler: native scaling");
+      else if (fsrOk) printCli(std::wstring(upscalerChoice.label) + L" OK: " + fsr.lastError());
+      else       printCli(std::wstring(upscalerChoice.label) + L" FAIL (raw capture only): " + fsr.lastError());
     }
-    // Always show FSR path/status on the HUD so we can verify the hooked module.
+    // Always show the upscaler path/status on the HUD so we can verify the hooked module.
     {
-      std::wstring st = (fsrOk ? L"FSR " : L"FSR off: ") + fsr.lastError();
+      std::wstring st = !upscalerChoice.ffx ? std::wstring(L"Native scaling")
+                      : std::wstring(upscalerChoice.label) + (fsrOk ? L" " : L" off: ") + fsr.lastError();
       setStatus(out, st.c_str());
     }
 
     AmdOf amdof;
     FastMv fastmv;
-    if (fsrOk) {
+    if (pipelineOk) {
       amdof.init(gfx.device(), gfx.queue(), render, false); // existing implementation
       if (spec.motionMode == TargetSpec::MotionMode::Fast)
         fastmv.init(gfx.device(), render);
@@ -361,7 +371,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       overlayConsumeFrameLimitToggle();
       const auto limitCfg = overlayFrameLimitConfig();
       frameLimiter.configure(limitCfg.enabled, limitCfg.fps, limitCfg.method);
-      if (overlayConsumeFsrToggle() && fsrOk) {
+      if (overlayConsumeFsrToggle() && pipelineOk) {
         fsrEnabled = !fsrEnabled;
         overlaySetFsrEnabled(fsrEnabled);
         reset = true;
@@ -518,6 +528,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       const bool resetThisFrame = reset;
 
       ID3D12Resource* nrOutputForFrame = nullptr;
+      bool motionRan = false;
       if (fsrEnabled && depth && mv && upscale) {
         // ---- Batch A: pre-OF+FSR prep -------------------------------------
         //   color:   COMMON  -> PS|NPS   (FSR & AMDOF read as SRV)
@@ -560,6 +571,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         // consumes colour. Its native D3D12/Vulkan bridge submits the current
         // command list, signals/waits on shared GPU fences, and resumes recording
         // on a second allocator/list; no CPU readback or GPU-completion wait.
+        motionRan = motionReady;
         if (motionReady) {
           const auto& nrSettings = overlayDlssNrConfig();
           if (nrSettings.enabled) {
@@ -632,7 +644,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         // No barrier needed for mv — AMDOF left it in PS|NPS.
         ID3D12Resource* fsrInputColour = nrStabilizedColour ? nrStabilizedColour :
             (nrOutputForFrame ? nrOutputForFrame : color.Get());
-        usedFsr = motionReady && fsr.dispatch(cmd, fsrInputColour, depth, mv,
+        usedFsr = motionReady && fsrOk && fsr.dispatch(cmd, fsrInputColour, depth, mv,
                                               reactiveReady ? reactive : nullptr,
                                               upscale, cs, display, dt, reset);
         reset = false;
@@ -691,7 +703,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
       // The FFX frame-interpolation swapchain owns generation and pacing.
       // Configure every output frame, but only prepare when FSR inputs are valid.
-      const bool runFgThisFrame = fgEnabled && fgOk && usedFsr && depth && mv;
+      // Native scaling has no upscaler pass, but FG still has the frame's motion.
+      const bool runFgThisFrame = fgEnabled && fgOk && (usedFsr || (!upscalerChoice.ffx && motionRan)) && depth && mv;
       bool fgPrepared = true;
       if (fgOk) {
         if (runFgThisFrame) {
@@ -788,7 +801,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       hi.output = display;
       hi.visible = !spec.noOverlay && isOverlayOpen();
       hi.status = L"frames=" + std::to_wstring(cap.totalFrames()) +
-                  (usedFsr ? L" FSR" : L" blit") +
+                  (usedFsr ? L" " + std::wstring(upscalerChoice.label) : std::wstring(L" blit")) +
                   L" | mv=" + spec.motionModeText + L" | " + spec.stopHotkeyText + L"=quit | " + spec.overlayHotkeyText + L"=overlay | bypass=" + (spec.bindBypassText.empty() ? std::wstring(L"default") : spec.bindBypassText);
       updateHud(nullptr, hi);
     }

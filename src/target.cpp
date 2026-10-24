@@ -346,6 +346,9 @@ std::wstring targetUsage()
         L"  NRLive.exe -nooverlay         disable the NRLive HUD overlay\n"
         L"  NRLive.exe --key ctrl+shift+a set the global stop hotkey\n"
         L"  NRLive.exe --mv amdof|fast    select motion-vector implementation (default: fast)\n"
+        L"  NRLive.exe --upscaler fsr4|fsr31|none\n"
+        L"                                  upscaler after capture and DLSSNR (default: fsr4;\n"
+        L"                                  none stretches the frame to the output)\n"
         L"  NRLive.exe --bindbypass home,insert,end,pageup,pagedown\n"
         L"                                  OptiScaler/ReShade menu keys (not sent to game).\n"
         L"                                  Default: Home,Insert,End,PageUp,PageDown.\n"
@@ -451,6 +454,11 @@ bool parseTargetArgs(int argc, wchar_t** argv, TargetSpec& spec, std::wstring& e
                 error = L"invalid motion mode: " + value + L" (valid: amdof, fast)";
                 return false;
             }
+        } else if (opt == L"--upscaler" || opt == L"-upscaler") {
+            if (!need(value)) return false;
+            const UpscalerInfo* u = findUpscaler(value);
+            if (!u) { error = L"invalid upscaler: " + value + L" (valid: " + upscalerIds() + L")"; return false; }
+            spec.upscaler = u->kind;
         } else if (opt == L"--trace" || opt == L"-trace") {
             if (!need(value)) return false;
             spec.tracePath = value;
