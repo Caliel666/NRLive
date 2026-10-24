@@ -858,6 +858,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         hs.latencyMs = (float)((renderEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart));
         const auto& gt = gpuTimer.latest();
         hs.gpuMotionMs = gt.motion; hs.gpuNrMs = gt.nr; hs.gpuFsrMs = gt.fsr; hs.gpuTotalMs = gt.total;
+        if (openNrSelected && overlayDlssNrConfig().enabled) {
+          // The queue timestamps around OpenNR also hold its D3D12/Vulkan fence
+          // waits; the runtime's own median is the network's GPU time.
+          hs.nrBuilding = openNr.building();
+          if (hs.nr && gt.nr >= 0 && openNr.gpuMs() >= 0) hs.gpuNrMs = openNr.gpuMs();
+        }
         overlayUpdate(hs);
         // Desktop duplication would see the HUD over the target; WGC never does.
         overlaySetCaptureExcluded(cap.usingDxgi());

@@ -42,7 +42,7 @@ struct Shared {
   double sumMs = 0; int frames = 0;
   double latSum = 0; int latN = 0;
   double gpuSum[4]{}; int gpuN[4]{};
-  bool fsr = false, nr = false, fg = false;
+  bool fsr = false, nr = false, fg = false, nrBuilding = false;
   ::Size cap{}, out{};
   float ring[kRing]{};
   int ringIdx = 0, ringCount = 0;
@@ -60,7 +60,7 @@ SysMon g_sys;
 struct View {
   float outFps = 0, srcFps = 0, genFps = 0, ftMs = 0, low1 = 0, low01 = 0;
   float lat = -1, gpu[4]{ -1, -1, -1, -1 };
-  bool fsr = false, nr = false, fg = false;
+  bool fsr = false, nr = false, fg = false, nrBuilding = false;
   ::Size cap{}, out{};
   SysSnapshot sys;
   float drawMs = 0;
@@ -207,9 +207,11 @@ std::vector<Row> buildRows(const OverlayHudConfig& c, const View& v, bool showCo
     row({ { L"CPU", St::Label }, { v.sys.cpuLoad >= 0 ? num0(v.sys.cpuLoad) : L"-", St::Value }, { L"%", St::Unit } });
   if (c.ram && v.sys.ramUsedGb >= 0)
     row({ { L"RAM", St::Label }, { num1(v.sys.ramUsedGb), St::Value }, { L"/ " + num1(v.sys.ramTotalGb) + L" GB", St::Unit } });
-  if (c.pipeline)
+  if (c.pipeline) {
     row({ { L"FSR", v.fsr ? St::PillOn : St::PillOff }, { L"NR", v.nr ? St::PillOn : St::PillOff },
           { L"FG", v.fg ? St::PillOn : St::PillOff } });
+    if (v.nrBuilding && !v.nr) rows.back().segs.push_back({ L"NR building", St::Muted });
+  }
   if (c.gpu_times) {
     Row r{ Row::Text, { { L"PASS", St::Label } } };
     const wchar_t* names[3] = { L"MV", L"NR", L"FSR" };
@@ -513,7 +515,7 @@ void threadMain(HANDLE ready) {
         }
         view.lat = g_s.latN ? (float)(g_s.latSum / g_s.latN) : -1;
         for (int i = 0; i < 4; ++i) view.gpu[i] = g_s.gpuN[i] ? (float)(g_s.gpuSum[i] / g_s.gpuN[i]) : -1;
-        view.fsr = g_s.fsr; view.nr = g_s.nr; view.fg = g_s.fg;
+        view.fsr = g_s.fsr; view.nr = g_s.nr; view.fg = g_s.fg; view.nrBuilding = g_s.nrBuilding;
         view.cap = g_s.cap; view.out = g_s.out;
         g_s.sumMs = 0; g_s.frames = 0; g_s.latSum = 0; g_s.latN = 0;
         for (int i = 0; i < 4; ++i) { g_s.gpuSum[i] = 0; g_s.gpuN[i] = 0; }
@@ -656,6 +658,6 @@ void hudPushFrame(const HudFrame& f) {
   if (f.latencyMs >= 0 && f.latencyMs < 1000) { g_s.latSum += f.latencyMs; g_s.latN++; }
   const float gpu[4] = { f.gpuMotionMs, f.gpuNrMs, f.gpuFsrMs, f.gpuTotalMs };
   for (int i = 0; i < 4; ++i) if (gpu[i] >= 0) { g_s.gpuSum[i] += gpu[i]; g_s.gpuN[i]++; }
-  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg;
+  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg; g_s.nrBuilding = f.nrBuilding;
   g_s.cap = f.capture; g_s.out = f.output;
 }

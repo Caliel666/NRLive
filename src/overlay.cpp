@@ -840,7 +840,7 @@ static bool comboDown(UINT mods, UINT vk) {
 void overlayUpdate(const OverlayFrameStats& st) {
   HudFrame f;
   f.sourceMs = st.sourceMs; f.capture = st.capture; f.output = st.output;
-  f.fsr = st.fsr; f.nr = st.nr; f.fg = g_fgActive; f.latencyMs = st.latencyMs;
+  f.fsr = st.fsr; f.nr = st.nr; f.nrBuilding = st.nrBuilding; f.fg = g_fgActive; f.latencyMs = st.latencyMs;
   f.gpuMotionMs = st.gpuMotionMs; f.gpuNrMs = st.gpuNrMs; f.gpuFsrMs = st.gpuFsrMs; f.gpuTotalMs = st.gpuTotalMs;
   hudPushFrame(f);
 
