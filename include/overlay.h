@@ -2,23 +2,7 @@
 #include <windows.h>
 #include <string>
 #include "graphics.h"
-
-// ── MangoHud-style overlay config ─────────────────────────────────────────
-struct OverlayHudConfig {
-  bool fps = true;              // show FPS number
-  bool frametime = true;        // show frametime ms
-  bool frame_timing = true;    // show frametime graph
-  bool resolution = true;      // show resolution
-  bool background = true;      // show semi-transparent background
-  bool text_outline = true;   // draw black outline around text
-  int  fontSize = 24;          // main font size (px)
-  int  position = 0;           // 0=TL 1=TR 2=BL 3=BR
-  float background_alpha = 0.5f; // 0..1
-  // MangoHud default colors (RRGGBB → RGB)
-  COLORREF engine_color = RGB(235,91,91);    // #EB5B5B red
-  COLORREF text_color = RGB(255,255,255);   // #FFFFFF white
-  COLORREF frametime_color = RGB(0,255,0);  // #00FF00 green
-};
+#include "hud_config.h"
 
 // Frame pacing settings persisted in scaleconfig.ini.
 struct OverlayFrameLimitConfig {
@@ -48,15 +32,26 @@ struct OverlayDlssNrConfig {
 // The overlay has two parts:
 //   1. Top bar (buttons: FSR / FPS / Camera / Settings) — only visible when
 //      overlay mode is open.
-//   2. MangoHud-style FPS overlay — persists even after overlay mode closes,
-//      toggled by the FPS button.
-// Both are GDI child windows of the main NRLive output window.
+//   2. MangoHud-style performance HUD (hud.cpp) — persists after overlay mode
+//      closes, toggled by the FPS button or its own hotkey.
+// Both are separate top-level windows above the NRLive output window.
 
 bool overlayInit(HINSTANCE inst, HWND output);
 void overlayShutdown();
 void overlaySetOpen(bool open);             // show/hide top bar + settings
 void overlaySetPresentationVisible(bool visible); // hide/re-anchor FPS HUD across focus changes
-void overlayUpdate(float fps, float frametimeMs, Size capture, Size output);
+// Per-frame numbers for the HUD. Call once per presented source frame.
+struct OverlayFrameStats {
+  float sourceMs = 0;          // interval between captured frames
+  Size capture{}, output{};
+  bool fsr = false, nr = false;
+  float latencyMs = -1;        // capture timestamp -> present call, <0 unknown
+  float gpuMotionMs = -1, gpuNrMs = -1, gpuFsrMs = -1, gpuTotalMs = -1;
+};
+void overlayUpdate(const OverlayFrameStats& stats);
+void overlaySetAdapter(LUID luid);           // GPU the HUD reports sensors for
+void overlaySetCaptureExcluded(bool exclude); // hide HUD from desktop capture (DXGI mode)
+bool overlayWantsGpuTimes();
 void overlaySetFsrEnabled(bool enabled);
 bool overlayConsumeFsrToggle();             // returns true once when FSR button clicked
 bool overlayConsumeScreenshot();            // returns true once when Camera button clicked

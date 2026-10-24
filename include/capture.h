@@ -42,6 +42,8 @@ public:
   bool usingDxgi() const { return m_dxgiMode; }
   const std::wstring& lastError() const { return m_error; }
   uint64_t totalFrames() const { return m_frameCount.load(); }
+  // QPC time of the last acquired frame in 100 ns units (0 = unknown).
+  int64_t lastFrameTime100ns() const { return m_lastFrameTime100ns; }
 
 private:
   bool createOutputTexture(Size size);
@@ -63,6 +65,7 @@ private:
 
   ComPtr<IDXGIOutputDuplication> m_duplication;
   bool m_dxgiMode = false;
+  int64_t m_lastFrameTime100ns = 0;
   bool m_dxgiCursorFallbackTried = false;
   RECT m_monitorRect{};
   RECT m_captureRect{};

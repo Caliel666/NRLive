@@ -440,6 +440,13 @@ bool Capture::acquire(ComPtr<ID3D12Resource>& out, Size& size, uint64_t& fenceVa
       }
     }
 
+    m_lastFrameTime100ns = 0;
+    if (frameInfo.LastPresentTime.QuadPart) {
+      LARGE_INTEGER f{};
+      QueryPerformanceFrequency(&f);
+      m_lastFrameTime100ns = (int64_t)(frameInfo.LastPresentTime.QuadPart * 10000000.0 / (double)f.QuadPart);
+    }
+
     ComPtr<ID3D11Texture2D> src;
     HRESULT query = desktopResource.As(&src);
     if (FAILED(query)) {
@@ -511,6 +518,8 @@ bool Capture::acquire(ComPtr<ID3D12Resource>& out, Size& size, uint64_t& fenceVa
       frame = std::move(next);
     }
   } catch (...) {}
+
+  try { m_lastFrameTime100ns = frame.SystemRelativeTime().count(); } catch (...) { m_lastFrameTime100ns = 0; }
 
   ComPtr<ID3D11Texture2D> src;
   try {

@@ -11,6 +11,7 @@
 #include "overlay.h"
 #include "target.h"
 #include "frametrace.h"
+#include "gpu_timer.h"
 #include "frame_limiter.h"
 #include "frame_timing.h"
 #include <windows.h>
@@ -300,6 +301,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     }
 
     overlayInit(inst, out);
+    overlaySetAdapter(gfx.device()->GetAdapterLuid());
+    GpuTimer gpuTimer;
+    gpuTimer.init(gfx.device(), gfx.queue());
     fsr.setSharpening(true, overlaySharpness());
     overlaySetFsrEnabled(fsrEnabled);
     setOverlayHud(nullptr);
@@ -509,8 +513,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       loopMs = (float)((now.QuadPart - lastCaptured.QuadPart) * 1000.0 / double(freq.QuadPart));
       lastCaptured = now;
       if (loopMs > 0.001f) fps = frame_timing::fpsFromFrameDeltaMs(loopMs);
-      Size csForOverlay = cs;
-      overlayUpdate(fps, loopMs, csForOverlay, display);
       if (cap.fence() && fenceVal)
         gfx.queue()->Wait(cap.fence(), fenceVal);
       lastCs = cs;
@@ -543,6 +545,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
       gfx.begin();
       auto* cmd = gfx.cmd();
+      gpuTimer.setEnabled(overlayWantsGpuTimes());
+      gpuTimer.mark(cmd, GpuTimer::Begin);
       ID3D12Resource* back = gfx.backbuffer();
       ID3D12Resource* upscale = gfx.upscaleOutput();
       ID3D12Resource* depth = gfx.dummyDepth();
@@ -593,6 +597,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           amdof.dispatch(cmd, color.Get(), mv, cs, reset);
           motionReady = true;
         }
+        gpuTimer.mark(cmd, GpuTimer::Motion);
 
         // DLSSNR runs after the same-frame motion vectors are ready and before FSR
         // consumes colour. Its native D3D12/Vulkan bridge submits the current
@@ -683,11 +688,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
         // FSR dispatch (reads color/depth/mv as SRV, writes upscale as UAV).
         // No barrier needed for mv — AMDOF left it in PS|NPS.
+        if (nrOutputForFrame) gpuTimer.mark(cmd, GpuTimer::Nr);
         ID3D12Resource* fsrInputColour = nrStabilizedColour ? nrStabilizedColour :
             (nrOutputForFrame ? nrOutputForFrame : color.Get());
         usedFsr = motionReady && fsrOk && fsr.dispatch(cmd, fsrInputColour, depth, mv,
                                               reactiveReady ? reactive : nullptr,
                                               upscale, cs, display, dt, reset);
+        if (usedFsr) gpuTimer.mark(cmd, GpuTimer::Fsr);
         reset = false;
         presentSrc = usedFsr ? upscale : fsrInputColour;
 
@@ -820,6 +827,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         cmd->ResourceBarrier(n, b);
       }
 
+      gpuTimer.mark(gfx.cmd(), GpuTimer::End);
+      gpuTimer.resolve(gfx.cmd());
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
@@ -836,6 +845,23 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       const double acquireMs = (acquireEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       const double renderCpuMs = (renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       trace.record(cap.totalFrames(), loopMs, acquireMs, renderCpuMs, cs, display, spec.motionModeText, usedFsr);
+
+      gpuTimer.frameDone();
+      {
+        OverlayFrameStats hs;
+        hs.sourceMs = loopMs;
+        hs.capture = cs;
+        hs.output = display;
+        hs.fsr = usedFsr;
+        hs.nr = nrOutputForFrame != nullptr;
+        if (const int64_t t = cap.lastFrameTime100ns())
+          hs.latencyMs = (float)((renderEnd.QuadPart * 10000000.0 / double(freq.QuadPart) - (double)t) / 10000.0);
+        const auto& gt = gpuTimer.latest();
+        hs.gpuMotionMs = gt.motion; hs.gpuNrMs = gt.nr; hs.gpuFsrMs = gt.fsr; hs.gpuTotalMs = gt.total;
+        overlayUpdate(hs);
+        // Desktop duplication would see the HUD over the target; WGC never does.
+        overlaySetCaptureExcluded(cap.usingDxgi());
+      }
 
       HudInfo hi;
       hi.fps = fps;
