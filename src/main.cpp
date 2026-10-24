@@ -2,6 +2,8 @@
 #include "capture.h"
 #include "fsr.h"
 #include "dlssnr.h"
+#include "opennr.h"
+#include "nr_status.h"
 #include "dlssnr_stabilizer.h"
 #include "amdof.h"
 #include "fastmv.h"
@@ -250,7 +252,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
     DlssNrRuntime dlssNr;
     DlssNrStabilizer dlssNrStabilizer;
+    OpenNrRuntime openNr;
+    NrConfigWatcher nrConfig;
+    nrConfig.refresh();
+    auto useOpenNr = [&] {
+      const auto choice = nrConfig.get().runtime;
+      return choice == NrRuntimeChoice::OpenNr ||
+             (choice == NrRuntimeChoice::Auto && !OpenNrRuntime::locate().empty());
+    };
+    bool openNrSelected = useOpenNr();
+    logMain(openNrSelected ? L"DLSSNR runtime: OpenNR (" + OpenNrRuntime::locate().wstring() + L")"
+                           : std::wstring(L"DLSSNR runtime: NRLiveDlssNrBridge"));
     std::wstring lastDlssNrError;
+    std::wstring lastNrStatus;
+    ULONGLONG lastNrStatusLog = 0;
     bool lastDlssNrStabilizerEnabled = false;
 
     // The upscaler. FFX ones get a context; "none" keeps motion and DLSSNR
@@ -349,7 +364,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (!running) break;
 
       pollOverlayToggle(spec);
-      if (overlayConsumeDlssNrToggle()) reset = true;
+      if (overlayConsumeDlssNrToggle()) {
+        reset = true;
+        openNr.clearFailure();
+      }
+      if (nrConfig.refresh()) {
+        const bool selected = useOpenNr();
+        if (selected != openNrSelected) {
+          openNrSelected = selected;
+          reset = true;
+          logMain(selected ? L"DLSSNR runtime: OpenNR" : L"DLSSNR runtime: NRLiveDlssNrBridge");
+        }
+      }
       const bool stabilizerEnabledNow = overlayDlssNrConfig().stabilizer;
       if (stabilizerEnabledNow != lastDlssNrStabilizerEnabled) {
         reset = true;
@@ -528,6 +554,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       const bool resetThisFrame = reset;
 
       ID3D12Resource* nrOutputForFrame = nullptr;
+      D3D12_RESOURCE_STATES nrOutputRestState = D3D12_RESOURCE_STATE_COMMON;
       bool motionRan = false;
       if (fsrEnabled && depth && mv && upscale) {
         // ---- Batch A: pre-OF+FSR prep -------------------------------------
@@ -572,7 +599,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         // command list, signals/waits on shared GPU fences, and resumes recording
         // on a second allocator/list; no CPU readback or GPU-completion wait.
         motionRan = motionReady;
-        if (motionReady) {
+        if (motionReady && openNrSelected && overlayDlssNrConfig().enabled) {
+          const auto mvState = spec.motionMode == TargetSpec::MotionMode::Fast
+              ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+              : (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          // OpenNR's runtime reads the capture texture on this list and writes
+          // its own result texture, so no snapshot is needed.
+          ID3D12Resource* nrOut = openNr.process(gfx, color.Get(),
+              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+              cs, mv, mvState, resetThisFrame, nrConfig.get().openNr);
+          cmd = gfx.cmd(); // recording continues on the continuation list
+          if (nrOut) {
+            nrOutputForFrame = nrOut;
+            nrOutputRestState = OpenNrRuntime::restState();
+          }
+        } else if (motionReady) {
           const auto& nrSettings = overlayDlssNrConfig();
           if (nrSettings.enabled) {
             const bool nrAvailable = dlssNr.available(nrSettings.newModel);
@@ -775,7 +816,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (nrOutputForFrame)
           tr(nrOutputForFrame,
              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-             D3D12_RESOURCE_STATE_COMMON);
+             nrOutputRestState);
         cmd->ResourceBarrier(n, b);
       }
 
@@ -783,6 +824,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
       gfx.present();
+      openNr.retire(); // its consumer list went with Present
       if (fgOk && fg.failed()) {
         fgEnabled = false;
         overlaySetFgEnabled(false);
@@ -800,8 +842,26 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       hi.capture = cs;
       hi.output = display;
       hi.visible = !spec.noOverlay && isOverlayOpen();
+      std::wstring nrStatus;
+      if (openNrSelected && overlayDlssNrConfig().enabled) {
+        nrStatus = openNr.status();
+        // A new kind of status is logged at once; the same kind with new
+        // numbers (build progress, GPU time) every 10 s.
+        auto kind = [](const std::wstring& s) { return s.substr(0, s.find_first_of(L"0123456789")); };
+        const ULONGLONG nowTick = GetTickCount64();
+        if (nrStatus != lastNrStatus &&
+            (kind(nrStatus) != kind(lastNrStatus) || nowTick - lastNrStatusLog >= 10000)) {
+          lastNrStatus = nrStatus;
+          lastNrStatusLog = nowTick;
+          if (!nrStatus.empty()) logMain(L"DLSSNR: " + nrStatus);
+        }
+      }
+      setNrStatusLine(openNrSelected ? nrStatus
+                      : (overlayDlssNrConfig().enabled ? L"0.0.6 bridge" + (lastDlssNrError.empty() ? std::wstring() : L": " + lastDlssNrError)
+                                                       : std::wstring()));
       hi.status = L"frames=" + std::to_wstring(cap.totalFrames()) +
                   (usedFsr ? L" " + std::wstring(upscalerChoice.label) : std::wstring(L" blit")) +
+                  (nrStatus.empty() ? std::wstring() : L" | " + nrStatus) +
                   L" | mv=" + spec.motionModeText + L" | " + spec.stopHotkeyText + L"=quit | " + spec.overlayHotkeyText + L"=overlay | bypass=" + (spec.bindBypassText.empty() ? std::wstring(L"default") : spec.bindBypassText);
       updateHud(nullptr, hi);
     }
@@ -813,6 +873,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     // AMD driver on quit.
     gfx.waitForGpu();
 
+    openNr.shutdown();
     fastmv.shutdown();
     amdof.shutdown();
     fg.shutdown();
