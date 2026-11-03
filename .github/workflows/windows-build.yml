@@ -155,11 +155,18 @@ jobs:
           Write-Host "FSR SDK root: $($sdk.FullName)"
           Write-Host "FSR runtime folder: $binRoot"
 
+      - name: Download OpenNR DLSSNR runtime (MochizukiNrRuntime.dll, no model weights)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./scripts/fetch_opennr_runtime.ps1 -Destination "$env:RUNNER_TEMP/opennr-runtime"
+          "OPENNR_RUNTIME=$env:RUNNER_TEMP/opennr-runtime" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DBUILD_TESTING=ON
+          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
@@ -218,6 +225,13 @@ jobs:
           Copy-Item "build/dlssnr-runtime/dlssnr-amd" $package -Recurse -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
           Copy-Item "version.txt" "$package/version.txt" -Force
+
+          # OpenNR's DLSSNR runtime (GPL-3.0 host code + mochizuki's MIT runtime) in its
+          # own folder: its dlssnr-amd\ shaders differ from the 0.0.6 bridge's.
+          Copy-Item "build/Release/opennr" $package -Recurse -Force
+          Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
+          if (-not (Test-Path "$package/opennr/MochizukiNrRuntime.dll")) { throw "OpenNR runtime was not packaged." }
+          if (Get-ChildItem "$package/opennr" -Recurse -File -Filter "dlssnr*.bin") { throw "The package must not redistribute NVIDIA model weights." }
 
           foreach ($file in @(
             "NRLiveUI.exe",

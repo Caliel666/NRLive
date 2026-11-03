@@ -2,6 +2,8 @@
 #include "capture.h"
 #include "fsr.h"
 #include "dlssnr.h"
+#include "opennr.h"
+#include "nr_status.h"
 #include "dlssnr_stabilizer.h"
 #include "amdof.h"
 #include "fastmv.h"
@@ -250,25 +252,48 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
     DlssNrRuntime dlssNr;
     DlssNrStabilizer dlssNrStabilizer;
+    OpenNrRuntime openNr;
+    NrConfigWatcher nrConfig;
+    nrConfig.refresh();
+    auto useOpenNr = [&] {
+      const auto choice = nrConfig.get().runtime;
+      return choice == NrRuntimeChoice::OpenNr ||
+             (choice == NrRuntimeChoice::Auto && !OpenNrRuntime::locate().empty());
+    };
+    bool openNrSelected = useOpenNr();
+    logMain(openNrSelected ? L"DLSSNR runtime: OpenNR (" + OpenNrRuntime::locate().wstring() + L")"
+                           : std::wstring(L"DLSSNR runtime: NRLiveDlssNrBridge"));
     std::wstring lastDlssNrError;
+    std::wstring lastNrStatus;
+    ULONGLONG lastNrStatusLog = 0;
     bool lastDlssNrStabilizerEnabled = false;
+
+    // The upscaler. FFX ones get a context; "none" keeps motion and DLSSNR
+    // running and stretches the result to the output with the blit.
+    const UpscalerInfo& upscalerChoice = upscalerInfo(spec.upscaler);
     Fsr fsr;
-    bool fsrOk = fsr.init(gfx.device(), display, display);
-    logMain(fsrOk ? L"FSR upscaler init OK: " + fsr.lastError() : L"FSR upscaler init FAILED: " + fsr.lastError());
-    bool fsrEnabled = fsrOk;
+    bool fsrOk = upscalerChoice.ffx && fsr.init(gfx.device(), display, display, upscalerChoice);
+    const bool pipelineOk = fsrOk || !upscalerChoice.ffx;
+    if (upscalerChoice.ffx)
+      logMain(std::wstring(upscalerChoice.label) + (fsrOk ? L" upscaler init OK: " : L" upscaler init FAILED: ") + fsr.lastError());
+    else
+      logMain(L"Upscaler: native scaling (no FFX upscaler)");
+    bool fsrEnabled = pipelineOk;
     if (cliMode && hasConsole()) {
-      if (fsrOk) printCli(L"FSR OK: " + fsr.lastError());
-      else       printCli(L"FSR FAIL (raw capture only): " + fsr.lastError());
+      if (!upscalerChoice.ffx) printCli(L"Upscaler: native scaling");
+      else if (fsrOk) printCli(std::wstring(upscalerChoice.label) + L" OK: " + fsr.lastError());
+      else       printCli(std::wstring(upscalerChoice.label) + L" FAIL (raw capture only): " + fsr.lastError());
     }
-    // Always show FSR path/status on the HUD so we can verify the hooked module.
+    // Always show the upscaler path/status on the HUD so we can verify the hooked module.
     {
-      std::wstring st = (fsrOk ? L"FSR " : L"FSR off: ") + fsr.lastError();
+      std::wstring st = !upscalerChoice.ffx ? std::wstring(L"Native scaling")
+                      : std::wstring(upscalerChoice.label) + (fsrOk ? L" " : L" off: ") + fsr.lastError();
       setStatus(out, st.c_str());
     }
 
     AmdOf amdof;
     FastMv fastmv;
-    if (fsrOk) {
+    if (pipelineOk) {
       amdof.init(gfx.device(), gfx.queue(), render, false); // existing implementation
       if (spec.motionMode == TargetSpec::MotionMode::Fast)
         fastmv.init(gfx.device(), render);
@@ -339,7 +364,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (!running) break;
 
       pollOverlayToggle(spec);
-      if (overlayConsumeDlssNrToggle()) reset = true;
+      if (overlayConsumeDlssNrToggle()) {
+        reset = true;
+        openNr.clearFailure();
+      }
+      if (nrConfig.refresh()) {
+        const bool selected = useOpenNr();
+        if (selected != openNrSelected) {
+          openNrSelected = selected;
+          reset = true;
+          logMain(selected ? L"DLSSNR runtime: OpenNR" : L"DLSSNR runtime: NRLiveDlssNrBridge");
+        }
+      }
       const bool stabilizerEnabledNow = overlayDlssNrConfig().stabilizer;
       if (stabilizerEnabledNow != lastDlssNrStabilizerEnabled) {
         reset = true;
@@ -361,7 +397,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       overlayConsumeFrameLimitToggle();
       const auto limitCfg = overlayFrameLimitConfig();
       frameLimiter.configure(limitCfg.enabled, limitCfg.fps, limitCfg.method);
-      if (overlayConsumeFsrToggle() && fsrOk) {
+      if (overlayConsumeFsrToggle() && pipelineOk) {
         fsrEnabled = !fsrEnabled;
         overlaySetFsrEnabled(fsrEnabled);
         reset = true;
@@ -518,6 +554,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       const bool resetThisFrame = reset;
 
       ID3D12Resource* nrOutputForFrame = nullptr;
+      D3D12_RESOURCE_STATES nrOutputRestState = D3D12_RESOURCE_STATE_COMMON;
+      bool motionRan = false;
       if (fsrEnabled && depth && mv && upscale) {
         // ---- Batch A: pre-OF+FSR prep -------------------------------------
         //   color:   COMMON  -> PS|NPS   (FSR & AMDOF read as SRV)
@@ -560,7 +598,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         // consumes colour. Its native D3D12/Vulkan bridge submits the current
         // command list, signals/waits on shared GPU fences, and resumes recording
         // on a second allocator/list; no CPU readback or GPU-completion wait.
-        if (motionReady) {
+        motionRan = motionReady;
+        if (motionReady && openNrSelected && overlayDlssNrConfig().enabled) {
+          const auto mvState = spec.motionMode == TargetSpec::MotionMode::Fast
+              ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+              : (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          // OpenNR's runtime reads the capture texture on this list and writes
+          // its own result texture, so no snapshot is needed.
+          ID3D12Resource* nrOut = openNr.process(gfx, color.Get(),
+              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+              cs, mv, mvState, resetThisFrame, nrConfig.get().openNr);
+          cmd = gfx.cmd(); // recording continues on the continuation list
+          if (nrOut) {
+            nrOutputForFrame = nrOut;
+            nrOutputRestState = OpenNrRuntime::restState();
+          }
+        } else if (motionReady) {
           const auto& nrSettings = overlayDlssNrConfig();
           if (nrSettings.enabled) {
             const bool nrAvailable = dlssNr.available(nrSettings.newModel);
@@ -632,7 +685,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         // No barrier needed for mv — AMDOF left it in PS|NPS.
         ID3D12Resource* fsrInputColour = nrStabilizedColour ? nrStabilizedColour :
             (nrOutputForFrame ? nrOutputForFrame : color.Get());
-        usedFsr = motionReady && fsr.dispatch(cmd, fsrInputColour, depth, mv,
+        usedFsr = motionReady && fsrOk && fsr.dispatch(cmd, fsrInputColour, depth, mv,
                                               reactiveReady ? reactive : nullptr,
                                               upscale, cs, display, dt, reset);
         reset = false;
@@ -691,7 +744,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
       // The FFX frame-interpolation swapchain owns generation and pacing.
       // Configure every output frame, but only prepare when FSR inputs are valid.
-      const bool runFgThisFrame = fgEnabled && fgOk && usedFsr && depth && mv;
+      // Native scaling has no upscaler pass, but FG still has the frame's motion.
+      const bool runFgThisFrame = fgEnabled && fgOk && (usedFsr || (!upscalerChoice.ffx && motionRan)) && depth && mv;
       bool fgPrepared = true;
       if (fgOk) {
         if (runFgThisFrame) {
@@ -762,7 +816,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (nrOutputForFrame)
           tr(nrOutputForFrame,
              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-             D3D12_RESOURCE_STATE_COMMON);
+             nrOutputRestState);
         cmd->ResourceBarrier(n, b);
       }
 
@@ -770,6 +824,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
       gfx.present();
+      openNr.retire(); // its consumer list went with Present
       if (fgOk && fg.failed()) {
         fgEnabled = false;
         overlaySetFgEnabled(false);
@@ -787,8 +842,26 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       hi.capture = cs;
       hi.output = display;
       hi.visible = !spec.noOverlay && isOverlayOpen();
+      std::wstring nrStatus;
+      if (openNrSelected && overlayDlssNrConfig().enabled) {
+        nrStatus = openNr.status();
+        // A new kind of status is logged at once; the same kind with new
+        // numbers (build progress, GPU time) every 10 s.
+        auto kind = [](const std::wstring& s) { return s.substr(0, s.find_first_of(L"0123456789")); };
+        const ULONGLONG nowTick = GetTickCount64();
+        if (nrStatus != lastNrStatus &&
+            (kind(nrStatus) != kind(lastNrStatus) || nowTick - lastNrStatusLog >= 10000)) {
+          lastNrStatus = nrStatus;
+          lastNrStatusLog = nowTick;
+          if (!nrStatus.empty()) logMain(L"DLSSNR: " + nrStatus);
+        }
+      }
+      setNrStatusLine(openNrSelected ? nrStatus
+                      : (overlayDlssNrConfig().enabled ? L"0.0.6 bridge" + (lastDlssNrError.empty() ? std::wstring() : L": " + lastDlssNrError)
+                                                       : std::wstring()));
       hi.status = L"frames=" + std::to_wstring(cap.totalFrames()) +
-                  (usedFsr ? L" FSR" : L" blit") +
+                  (usedFsr ? L" " + std::wstring(upscalerChoice.label) : std::wstring(L" blit")) +
+                  (nrStatus.empty() ? std::wstring() : L" | " + nrStatus) +
                   L" | mv=" + spec.motionModeText + L" | " + spec.stopHotkeyText + L"=quit | " + spec.overlayHotkeyText + L"=overlay | bypass=" + (spec.bindBypassText.empty() ? std::wstring(L"default") : spec.bindBypassText);
       updateHud(nullptr, hi);
     }
@@ -800,6 +873,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     // AMD driver on quit.
     gfx.waitForGpu();
 
+    openNr.shutdown();
     fastmv.shutdown();
     amdof.shutdown();
     fg.shutdown();

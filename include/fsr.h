@@ -9,10 +9,15 @@
 #include <dx12/ffx_api_dx12.h>
 #include <dx12/ffx_api_framegeneration_dx12.h>
 #include "graphics.h"
+#include "upscaler.h"
 
+// One FFX upscaler context. The provider is the one the UpscalerInfo asks for
+// (FSR 4, FSR 3.1, ...); when the loader offers none that matches, the
+// loader's default is used and lastError() says so.
 class Fsr {
 public:
-  bool init(ID3D12Device* device, Size maxRender, Size maxDisplay);
+  bool init(ID3D12Device* device, Size maxRender, Size maxDisplay,
+            const UpscalerInfo& choice = upscalerInfo(UpscalerKind::Fsr4));
   bool dispatch(ID3D12GraphicsCommandList* cmd,
                 ID3D12Resource* color,
                 ID3D12Resource* depth,
@@ -25,9 +30,12 @@ public:
   void setSharpening(bool on, float amount);
   void shutdown();
   const std::wstring& lastError() const { return m_error; }
+  // The FFX provider the context runs on, e.g. "FSR 3.1.5"; empty before init.
+  const std::wstring& provider() const { return m_provider; }
 
 private:
   ffxContext m_ctx = nullptr;
+  std::wstring m_provider;
   int m_quality = 1;
   bool m_sharpen = true;
   float m_sharpness = 0.5f;

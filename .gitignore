@@ -1,3 +1,6 @@
 build/
 ui/build/
 ui/.venv
+third_party/FidelityFX-SDK/
+third_party/ffx-bin/
+third_party/opennr-runtime/

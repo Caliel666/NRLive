@@ -1,5 +1,6 @@
 #include "overlay.h"
 #include "frame_limiter_math.h"
+#include "nr_status.h"
 #include <windowsx.h>
 #include <shlobj.h>
 #include <commdlg.h>
@@ -436,6 +437,7 @@ static void paintSettings(HWND h, HDC dc) {
     drawText(dc, L"Model weights are not included; see the DLSSNR setup instructions.", 24, 692, 10, C_DIM, false);
      drawText(dc, L"Extract both models from the same NVIDIA DLL 310.9.16.", 24, 652, 10, C_DIM, false);
     drawText(dc, g_saveStatus.c_str(), 24, 712, 10, C_MUTED, false);
+    drawText(dc, nrStatusLine().c_str(), 24, 725, 10, C_TEXT, false);
     return;
   }
   section(L"FPS OVERLAY",58);

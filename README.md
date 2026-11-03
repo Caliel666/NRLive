@@ -29,7 +29,8 @@ you can also use it with optiscaler and reshade to be able to apply those to any
 ## Features
 
 - Windows-only DXGI/D3D12 capture pipeline
-- AMD FSR 4 integration
+- AMD FSR 4 and FSR 3.1 upscaling, or native scaling (`--upscaler fsr4|fsr31|none`)
+- DLSSNR through OpenNR's `MochizukiNrRuntime.dll` (RenoDX look controls, int4, ACO, RX 7000 network) or the DLSSNR-AMD 0.0.6 bridge; see [docs/OPENNR-RUNTIME.md](docs/OPENNR-RUNTIME.md)
 - Motion-vector and frame-generation support
 - Toggleable overlay HUD
 - Keyboard hotkeys for scale/unscale and stop actions
@@ -71,5 +72,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 `
   -FfxSdk .\third_party\FidelityFX-SDK `
   -FfxBin .\third_party\ffx-bin
 ```
+
+Optional, for DLSSNR through OpenNR's runtime (not vendored; fetched into its own folder and staged as `opennr\`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch_opennr_runtime.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 `
+  -FfxSdk .\third_party\FidelityFX-SDK -FfxBin .\third_party\ffx-bin `
+  -OpenNrRuntime .\third_party\opennr-runtime
+```
+
+With Visual Studio 2026, add `-Generator "Visual Studio 18 2026"`.
   <circle cx="1185" cy="250" r="14" fill="#0a0d12"/>
 </svg>

@@ -49,6 +49,8 @@ add_executable(NRLive WIN32
   src/fsr.cpp
   src/dlssnr.cpp
   src/dlssnr_stabilizer.cpp
+  src/opennr.cpp
+  src/upscaler.cpp
   src/amdof.cpp
   src/fastmv.cpp
   src/ui.cpp
@@ -63,6 +65,7 @@ target_include_directories(NRLive PRIVATE
   "${FFX_INCLUDE_FG}"
   "${FFX_INCLUDE_UPSCALER}"
   "${CMAKE_SOURCE_DIR}/include"
+  "${CMAKE_SOURCE_DIR}/third_party/opennr"
 )
 
 target_compile_definitions(NRLive PRIVATE
@@ -85,7 +88,24 @@ foreach(_dll_path "${FFX_DLL_LOADER}" "${FFX_DLL_FRAMEGEN}" "${FFX_DLL_UPSCALER}
   )
 endforeach()
 
+# Optional: OpenNR's DLSSNR runtime (MochizukiNrRuntime.dll + dlssnr-amd\), not
+# vendored. Point OPENNR_RUNTIME at a folder made by scripts\fetch_opennr_runtime.ps1
+# (or an OpenNR build) and it is staged as opennr\ beside the EXE.
+set(OPENNR_RUNTIME "" CACHE PATH "Folder with MochizukiNrRuntime.dll and dlssnr-amd (optional)")
+if(OPENNR_RUNTIME)
+  if(NOT EXISTS "${OPENNR_RUNTIME}/MochizukiNrRuntime.dll")
+    message(FATAL_ERROR "OPENNR_RUNTIME has no MochizukiNrRuntime.dll: ${OPENNR_RUNTIME}")
+  endif()
+  add_custom_command(TARGET NRLive POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${OPENNR_RUNTIME}" "$<TARGET_FILE_DIR:NRLive>/opennr"
+  )
+endif()
+
 if(BUILD_TESTING)
+  add_executable(upscaler_choice_test tests/upscaler_choice_test.cpp src/upscaler.cpp)
+  target_include_directories(upscaler_choice_test PRIVATE "${CMAKE_SOURCE_DIR}/include")
+  add_test(NAME upscaler_provider_choice COMMAND upscaler_choice_test)
+
   add_executable(frame_timing_test tests/frame_timing_test.cpp)
   target_include_directories(frame_timing_test PRIVATE "${CMAKE_SOURCE_DIR}/include")
   add_test(NAME capture_frame_timing_invariants COMMAND frame_timing_test)

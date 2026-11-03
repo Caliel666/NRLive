@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private bool _loadingProfile;
     private bool _initialized;
     private bool _registeredHotkey;
+    private bool _loadingNr;
     private string _currentProfile = "Default";
     private string Root => AppContext.BaseDirectory;
     private string VersionPath => Path.Combine(Root, "version.txt");
@@ -41,6 +43,7 @@ public partial class MainWindow : Window
         public int delay { get; set; } = 5;
         public bool no_overlay { get; set; }
         public string motion { get; set; } = "fast";
+        public string upscaler { get; set; } = "fsr4";
         public string capture_mode { get; set; } = "wgc";
         public int? schema_version { get; set; }
         public bool run_as_admin { get; set; } = true;
@@ -64,7 +67,17 @@ public partial class MainWindow : Window
         OverlayHotkeyBox.TextChanged += (_, _) => UpdatePreview();
         BindBypassBox.TextChanged += (_, _) => UpdatePreview();
         ScaleHotkeyBox.TextChanged += (_, _) => UpdatePreview();
-        ExePathBox.TextChanged += (_, _) => UpdatePreview();
+        ExePathBox.TextChanged += (_, _) => { UpdatePreview(); if (_initialized) LoadNrSettings(); };
+        UpscalerBox.SelectionChanged += (_, _) => UpdatePreview();
+        foreach (var box in new[] { NrRuntimeBox, NrModelBox, NrStyleBox, NrPassesBox })
+            box.SelectionChanged += (_, _) => SaveNrSettings();
+        foreach (var check in new[] { NrEnabledBox, NrStyleGradeBox, NrAutoMaskBox, NrTemporalBox, NrAcoBox, NrInt4Box })
+        {
+            check.Checked += (_, _) => SaveNrSettings();
+            check.Unchecked += (_, _) => SaveNrSettings();
+        }
+        foreach (var slider in new[] { NrIntensitySlider, NrLocalToneSlider, NrStructureSlider, NrSkinSlider, NrColourSlider, NrHistorySlider })
+            slider.ValueChanged += (_, _) => SaveNrSettings();
         HudCheckBox.Checked += (_, _) => UpdatePreview();
         HudCheckBox.Unchecked += (_, _) => UpdatePreview();
         RunAsAdminCheckBox.Checked += (_, _) => UpdatePreview();
@@ -103,6 +116,7 @@ public partial class MainWindow : Window
         _source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
         _source?.AddHook(WndProc);
         RegisterToggleHotkey();
+        LoadNrSettings();
         UpdatePreview();
         VersionText.Text = $"v{ReadCurrentVersion()}";
         // Check in the background after the window is ready; don't block startup.
@@ -138,6 +152,7 @@ public partial class MainWindow : Window
             DelayBox.Text = Math.Clamp(p.delay, 1, 30).ToString();
             HudCheckBox.IsChecked = !p.no_overlay;
             MotionBox.SelectedIndex = p.motion == "amdof" ? 1 : 0;
+            UpscalerBox.SelectedIndex = p.upscaler switch { "fsr31" => 1, "none" => 2, _ => 0 };
             CaptureModeBox.SelectedIndex = p.capture_mode == "dxgi" ? 1 : 0;
             RunAsAdminCheckBox.IsChecked = p.run_as_admin;
             ScaleHotkeyBox.Text = p.scale_hotkey;
@@ -160,6 +175,7 @@ public partial class MainWindow : Window
         delay = int.TryParse(DelayBox.Text, out int delay) ? Math.Clamp(delay, 1, 30) : 5,
         no_overlay = HudCheckBox.IsChecked != true,
         motion = MotionBox.SelectedIndex == 1 ? "amdof" : "fast",
+        upscaler = UpscalerBox.SelectedIndex switch { 1 => "fsr31", 2 => "none", _ => "fsr4" },
         capture_mode = CaptureModeBox.SelectedIndex == 1 ? "dxgi" : "wgc",
         run_as_admin = RunAsAdminCheckBox.IsChecked == true,
         scale_hotkey = ScaleHotkeyBox.Text.Trim(),
@@ -498,6 +514,7 @@ public partial class MainWindow : Window
     private void StartScaling()
     {
         SaveCurrentProfile(false);
+        SaveNrSettings();
         var p = ReadProfile();
         if (SameHotkey(p.scale_hotkey, p.stop_key) || SameHotkey(p.scale_hotkey, p.overlay_key) || SameHotkey(p.stop_key, p.overlay_key))
         {
@@ -533,6 +550,7 @@ public partial class MainWindow : Window
         else if (p.target_mode == "window") { start.ArgumentList.Add("-window"); start.ArgumentList.Add(p.target_text); start.ArgumentList.Add("-delay"); start.ArgumentList.Add(p.delay.ToString()); }
         if (p.no_overlay) start.ArgumentList.Add("-nooverlay");
         start.ArgumentList.Add("--mv"); start.ArgumentList.Add(p.motion);
+        start.ArgumentList.Add("--upscaler"); start.ArgumentList.Add(p.upscaler);
         start.ArgumentList.Add("--capture"); start.ArgumentList.Add(p.capture_mode);
         start.ArgumentList.Add("--key"); start.ArgumentList.Add(p.stop_key);
         start.ArgumentList.Add("--overlaykey"); start.ArgumentList.Add(p.overlay_key);
@@ -593,7 +611,7 @@ public partial class MainWindow : Window
         if (CommandPreview == null || _loadingProfile) return;
         var p = ReadProfile();
         string target = p.target_mode switch { "front" => "-front", "pid" => $"-pid {p.target_text}", "pname" => $"-pname \"{p.target_text}\"", "window" => $"-window \"{p.target_text}\"", _ => $"-picker {p.delay}" };
-        CommandPreview.Text = $"{p.exe_path} {target} --capture {p.capture_mode} --mv {p.motion} --key {p.stop_key} --overlaykey {p.overlay_key} --bindbypass {p.bind_bypass}" + (p.run_as_admin ? " [run as admin]" : "");
+        CommandPreview.Text = $"{p.exe_path} {target} --capture {p.capture_mode} --mv {p.motion} --upscaler {p.upscaler} --key {p.stop_key} --overlaykey {p.overlay_key} --bindbypass {p.bind_bypass}" + (p.run_as_admin ? " [run as admin]" : "");
     }
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -605,6 +623,113 @@ public partial class MainWindow : Window
         _source = null;
         SaveCurrentProfile(false);
     }
+
+    // DLSSNR settings live in scaleconfig.ini beside NRLive.exe, where NRLive reads
+    // them (and re-reads them while it runs). [OpenNR] uses OptiScaler's key names.
+    private string NrIniPath
+    {
+        get
+        {
+            string exe = ExePathBox.Text.Trim();
+            string? dir = string.IsNullOrWhiteSpace(exe) ? null : Path.GetDirectoryName(exe);
+            return Path.Combine(string.IsNullOrWhiteSpace(dir) ? Root : dir, "scaleconfig.ini");
+        }
+    }
+
+    private string IniRead(string section, string key, string def)
+    {
+        var value = new StringBuilder(64);
+        GetPrivateProfileString(section, key, def, value, (uint)value.Capacity, NrIniPath);
+        return value.ToString().Trim();
+    }
+
+    private bool IniBool(string section, string key, bool def)
+    {
+        string v = IniRead(section, key, "").ToLowerInvariant();
+        return v is "1" or "true" or "on" ? true : v is "0" or "false" or "off" ? false : def;
+    }
+
+    private double IniDouble(string section, string key, double def, double min, double max)
+        => double.TryParse(IniRead(section, key, ""), System.Globalization.NumberStyles.Float,
+                           System.Globalization.CultureInfo.InvariantCulture, out double v) && double.IsFinite(v)
+            ? Math.Clamp(v, min, max) : def;
+
+    private void LoadNrSettings()
+    {
+        _loadingNr = true;
+        try
+        {
+            NrEnabledBox.IsChecked = IniBool("DLSSNR", "enabled", false);
+            NrRuntimeBox.SelectedIndex = IniRead("DLSSNR", "runtime", "auto").ToLowerInvariant() switch { "opennr" => 1, "bridge" => 2, _ => 0 };
+            NrModelBox.SelectedIndex = IniBool("OpenNR", "MochizukiOriginalModel", false) ? 1 : 0;
+            NrStyleBox.SelectedIndex = (int)IniDouble("OpenNR", "MochizukiRenoStyle", 0, 0, 2);
+            NrPassesBox.SelectedIndex = (int)IniDouble("OpenNR", "MochizukiRenoPasses", 1, 1, 4) - 1;
+            NrStyleGradeBox.IsChecked = IniBool("OpenNR", "MochizukiStyleGrade", true);
+            NrAutoMaskBox.IsChecked = IniBool("OpenNR", "MochizukiRenoAutoMask", false);
+            NrTemporalBox.IsChecked = IniBool("OpenNR", "MochizukiTemporal", true);
+            NrAcoBox.IsChecked = IniBool("OpenNR", "MochizukiAco", true);
+            NrInt4Box.IsChecked = IniBool("OpenNR", "MochizukiInt4", false);
+            NrIntensitySlider.Value = IniDouble("OpenNR", "MochizukiRenoIntensity", 1, 0, 2);
+            NrLocalToneSlider.Value = IniDouble("OpenNR", "MochizukiRenoLocalTone", 1, 0, 2);
+            NrStructureSlider.Value = IniDouble("OpenNR", "MochizukiRenoLocalStructure", 1, 0, 2);
+            NrSkinSlider.Value = IniDouble("OpenNR", "MochizukiRenoSkinStructure", -1, -1, 1);
+            NrColourSlider.Value = IniDouble("OpenNR", "MochizukiRenoColorStrength", 1, 0, 1);
+            NrHistorySlider.Value = IniDouble("OpenNR", "MochizukiHistoryStrength", 1, 0, 1);
+        }
+        finally { _loadingNr = false; }
+        UpdateNrRuntimeStatus();
+    }
+
+    private void SaveNrSettings()
+    {
+        if (_loadingNr || !_initialized) return;
+        string F(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string B(bool? v) => v == true ? "true" : "false";
+        try
+        {
+            string ini = NrIniPath;
+            WritePrivateProfileString("DLSSNR", "enabled", NrEnabledBox.IsChecked == true ? "1" : "0", ini);
+            WritePrivateProfileString("DLSSNR", "runtime", NrRuntimeBox.SelectedIndex switch { 1 => "opennr", 2 => "bridge", _ => "auto" }, ini);
+            WritePrivateProfileString("OpenNR", "MochizukiOriginalModel", B(NrModelBox.SelectedIndex == 1), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoStyle", Math.Max(0, NrStyleBox.SelectedIndex).ToString(), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoPasses", (Math.Max(0, NrPassesBox.SelectedIndex) + 1).ToString(), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiStyleGrade", B(NrStyleGradeBox.IsChecked), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoAutoMask", B(NrAutoMaskBox.IsChecked), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiTemporal", B(NrTemporalBox.IsChecked), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiAco", B(NrAcoBox.IsChecked), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiInt4", B(NrInt4Box.IsChecked), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoIntensity", F(NrIntensitySlider.Value), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoLocalTone", F(NrLocalToneSlider.Value), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoLocalStructure", F(NrStructureSlider.Value), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoSkinStructure", F(NrSkinSlider.Value), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiRenoColorStrength", F(NrColourSlider.Value), ini);
+            WritePrivateProfileString("OpenNR", "MochizukiHistoryStrength", F(NrHistorySlider.Value), ini);
+        }
+        catch (Exception ex) { FooterStatus.Text = $"Could not save DLSSNR settings: {ex.Message}"; }
+        UpdateNrRuntimeStatus();
+    }
+
+    private void UpdateNrRuntimeStatus()
+    {
+        string exeDir = Path.GetDirectoryName(NrIniPath) ?? Root;
+        string? runtime = new[] { Path.Combine(exeDir, "opennr"), exeDir }
+            .FirstOrDefault(d => File.Exists(Path.Combine(d, "MochizukiNrRuntime.dll")));
+        string ModelsIn(string dir) => string.Join(", ", new[] { ("dlssnr-small.bin", "Small"), ("dlssnr.bin", "Original") }
+            .Where(m => File.Exists(Path.Combine(dir, "dlssnr-amd", m.Item1))).Select(m => m.Item2));
+        string models = ModelsIn(exeDir);
+        if (runtime != null && runtime != exeDir && models.Length == 0) models = ModelsIn(runtime);
+        string modelText = models.Length == 0
+            ? "No model found: extract dlssnr-small.bin / dlssnr.bin into dlssnr-amd\\ from your own nvngx_dlssnr.dll."
+            : $"Models: {models}.";
+        NrRuntimeStatus.Text = runtime == null
+            ? "OpenNR runtime not found (opennr\\MochizukiNrRuntime.dll beside NRLive.exe); Auto uses the 0.0.6 bridge. " + modelText
+            : $"OpenNR runtime: {Path.GetRelativePath(exeDir, Path.Combine(runtime, "MochizukiNrRuntime.dll"))}. " + modelText;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint GetPrivateProfileString(string section, string key, string def, StringBuilder value, uint size, string file);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool WritePrivateProfileString(string section, string key, string? value, string file);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
