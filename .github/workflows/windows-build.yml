@@ -19,33 +19,39 @@ concurrency:
 
 jobs:
   opennr-runtime:
-    name: Download DLSSNR-AMD 0.0.8.2 Windows runtime
+    name: Download OpenNR runtime from GitLab
     runs-on: ubuntu-latest
     steps:
-      - name: Download and stage GitLab runtime package
+      - name: Download and stage GitLab OpenNR runtime
         shell: bash
         env:
           GITLAB_READ_PACKAGE_TOKEN: ${{ secrets.GITLAB_READ_PACKAGE_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/dlssnr-release" build/opennr-runtime
+          archive="$RUNNER_TEMP/opennr-runtime.zip"
+          extracted="$RUNNER_TEMP/opennr-runtime-extracted"
+          mkdir -p "$extracted" build/opennr-runtime
           runtime_url="https://gitlab.com/api/v4/projects/88319462/packages/generic/dlssnr-amd/0.0.8.2/DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip"
-          if [ -n "${GITLAB_READ_PACKAGE_TOKEN:-}" ]; then
-            curl -L --fail --retry 5 --retry-delay 3 --header "Deploy-Token: ${GITLAB_READ_PACKAGE_TOKEN}" "$runtime_url" -o "$RUNNER_TEMP/dlssnr-runtime.zip"
-          else
-            echo "::warning::GITLAB_READ_PACKAGE_TOKEN is not configured; trying anonymous package download."
-            curl -L --fail --retry 5 --retry-delay 3 "$runtime_url" -o "$RUNNER_TEMP/dlssnr-runtime.zip"
+          if [ -z "${GITLAB_READ_PACKAGE_TOKEN:-}" ]; then
+            echo "::error::GITLAB_READ_PACKAGE_TOKEN is not configured. Add a GitLab deploy token with read_package_registry access as a repository Actions secret."
+            exit 1
           fi
-          unzip -q "$RUNNER_TEMP/dlssnr-runtime.zip" -d "$RUNNER_TEMP/dlssnr-release"
-          runtime_dll="$(find "$RUNNER_TEMP/dlssnr-release" -type f -name 'MochizukiNrRuntime.dll' -printf '%h\\n' | head -n 1)"
-          test -n "$runtime_dll" || { echo "::error::0.0.8.2 package does not contain MochizukiNrRuntime.dll"; find "$RUNNER_TEMP/dlssnr-release" -maxdepth 3 -type f | head -n 100; exit 1; }
-          test -d "$runtime_dll/dlssnr-amd/shaders" || { echo "::error::0.0.8.2 package is missing dlssnr-amd/shaders"; find "$RUNNER_TEMP/dlssnr-release" -maxdepth 4 -type d | head -n 100; exit 1; }
-          cp -a "$runtime_dll/." build/opennr-runtime/
-          test -s build/opennr-runtime/MochizukiNrRuntime.dll
-          test -d build/opennr-runtime/dlssnr-amd/shaders
-          echo "Staged DLSSNR-AMD 0.0.8.2 runtime:"
+          curl -L --fail --retry 5 --retry-delay 3 \
+            --header "Deploy-Token: ${GITLAB_READ_PACKAGE_TOKEN}" \
+            "$runtime_url" -o "$archive"
+          unzip -q "$archive" -d "$extracted"
+          runtime_dll="$(find "$extracted" -type f -name 'MochizukiNrRuntime.dll' -print -quit)"
+          if [ -z "$runtime_dll" ]; then
+            echo "::error::The GitLab runtime archive does not contain MochizukiNrRuntime.dll."
+            find "$extracted" -maxdepth 4 -type f | sort | head -n 100
+            exit 1
+          fi
+          runtime_root="$(dirname "$runtime_dll")"
+          cp -a "$runtime_root/." build/opennr-runtime/
+          echo "Prepared OpenNR runtime input:"
+          find build/opennr-runtime -maxdepth 2 -type f | sort | head -n 100
           du -sh build/opennr-runtime
-      - name: Upload DLSSNR runtime
+      - name: Upload OpenNR runtime input
         uses: actions/upload-artifact@v4
         with:
           name: NRLive-opennr-runtime
@@ -120,19 +126,11 @@ jobs:
           Write-Host "FSR SDK root: $($sdk.FullName)"
           Write-Host "FSR runtime folder: $binRoot"
 
-      - name: Configure OpenNR runtime path
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          if (-not (Test-Path "build/opennr-runtime/MochizukiNrRuntime.dll")) { throw "DLSSNR-AMD 0.0.8.2 runtime DLL was not downloaded." }
-          if (-not (Test-Path "build/opennr-runtime/dlssnr-amd/shaders")) { throw "DLSSNR-AMD 0.0.8.2 shaders were not downloaded." }
-          "OPENNR_RUNTIME=$((Resolve-Path 'build/opennr-runtime').Path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Configure
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
+          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME=build/opennr-runtime -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
@@ -146,23 +144,13 @@ jobs:
           $ErrorActionPreference = "Stop"
           ctest --test-dir build -C Release --output-on-failure
 
-      - name: Verify runtime was staged
+      - name: Verify build outputs
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           if (-not (Test-Path "build/Release/NRLive.exe")) { throw "NRLive.exe was not produced." }
-          foreach ($dll in @(
-            "amd_fidelityfx_loader_dx12.dll",
-            "amd_fidelityfx_framegeneration_dx12.dll",
-            "amd_fidelityfx_upscaler_dx12.dll",
-            "NRLiveDlssNrBridge.dll",
-            "dlssnr_extract_model.exe",
-            "dlssnr_extract_small_model.exe",
-            "DLSSNR-AMD-LICENSE.txt",
-            "DLSSNR-AMD-UPSTREAM-README.txt"
-          )) {
-            $runtimePath = if ($dll -in @("NRLiveDlssNrBridge.dll", "dlssnr_extract_model.exe", "dlssnr_extract_small_model.exe", "DLSSNR-AMD-LICENSE.txt", "DLSSNR-AMD-UPSTREAM-README.txt")) { "build/dlssnr-runtime/$dll" } else { "build/Release/$dll" }
-            if (-not (Test-Path $runtimePath)) { throw "$dll was not staged: $runtimePath" }
+          foreach ($dll in @("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll")) {
+            if (-not (Test-Path "build/Release/$dll")) { throw "$dll was not staged by the FSR build." }
           }
 
       - name: Publish and assemble portable launcher package
@@ -185,14 +173,13 @@ jobs:
           # Package the GitLab DLSSNR-AMD 0.0.8.2 runtime via OpenNR.
           Copy-Item "build/Release/opennr" $package -Recurse -Force
           Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
-          if (-not (Test-Path "$package/opennr/MochizukiNrRuntime.dll")) { throw "DLSSNR-AMD 0.0.8.2 runtime was not packaged." }
 
           foreach ($file in @(
             "NRLiveUI.exe",
             "NRLive.exe",
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
-            "amd_fidelityfx_upscaler_dx12.dll",
+            "amd_fidelityfx_upscaler_dx12.dll"
           )) {
             if (-not (Test-Path (Join-Path $package $file))) { throw "Portable package is missing $file" }
           }
