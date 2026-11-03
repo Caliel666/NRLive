@@ -101,7 +101,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dlssnr-source" "$RUNNER_TEMP/dlssnr-release" build/dlssnr-runtime
           curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.5-win-preview.zip -o "$RUNNER_TEMP/dlssnr-source.zip"
-          runtime_url="https://gitlab.com/mochizuki0323/DLSSNR-AMD/-/releases/v0.0.8.2/downloads/DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip"
+          runtime_url="https://gitlab.com/api/v4/projects/88319462/packages/generic/dlssnr-amd/0.0.8.2/DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip"
           curl -L --fail --retry 5 --retry-delay 3 \
             -A "Mozilla/5.0 (compatible; NRLive-CI/1.0)" \
             "$runtime_url" -o "$RUNNER_TEMP/dlssnr-runtime.zip"
