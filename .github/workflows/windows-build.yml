@@ -130,7 +130,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME=build/opennr-runtime -DBUILD_TESTING=ON
+          $openNrRuntime = (Resolve-Path "build/opennr-runtime").Path
+          cmake -S . -B build -A x64 "-DFFX_SDK=$env:FFX_SDK" "-DFFX_BIN=$env:FFX_BIN" "-DOPENNR_RUNTIME=$openNrRuntime" -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
