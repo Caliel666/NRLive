@@ -127,6 +127,24 @@
                                     </ComboBox>
                                 </StackPanel>
                             </Border>
+                            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Upscaler" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                    <TextBlock Text="Runs after DLSSNR. FSR 4 needs an RX 9000; when a provider is not offered, the FSR loader's default is used." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
+                                    <ComboBox x:Name="UpscalerBox" SelectedIndex="0">
+                                        <ComboBoxItem Content="FSR 4 (default)"/>
+                                        <ComboBoxItem Content="FSR 3.1"/>
+                                        <ComboBoxItem Content="None (native scaling)"/>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Performance HUD" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                    <TextBlock Text="FPS, frametime graph, 1% lows, GPU / CPU sensors and FSR / NR / FG state over the output. Shift+F12 toggles it in game." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
+                                    <Button Content="HUD settings…" Click="HudSettings_Click" HorizontalAlignment="Left"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,14">
@@ -152,6 +170,71 @@
                             </Border>
                         </StackPanel>
                     </Grid>
+                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,14,0,0">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,5">
+                                <TextBlock Text="DLSSNR" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <CheckBox x:Name="NrEnabledBox" Content="Enabled at start" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTip="The NR button in the overlay turns it on and off while NRLive runs"/>
+                            </Grid>
+                            <TextBlock x:Name="NrRuntimeStatus" Text="" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Runtime" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,5"/>
+                                    <ComboBox x:Name="NrRuntimeBox" SelectedIndex="0" Margin="0,0,0,10">
+                                        <ComboBoxItem Content="Auto (OpenNR when installed)"/>
+                                        <ComboBoxItem Content="OpenNR runtime"/>
+                                        <ComboBoxItem Content="DLSSNR-AMD 0.0.6 bridge"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Model" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,5"/>
+                                    <ComboBox x:Name="NrModelBox" SelectedIndex="0" Margin="0,0,0,10" ToolTip="Small needs dlssnr-amd\dlssnr-small.bin; Original needs dlssnr-amd\dlssnr.bin. A change rebuilds the network.">
+                                        <ComboBoxItem Content="Small 310.9.16 (faster)"/>
+                                        <ComboBoxItem Content="Original 310.8"/>
+                                    </ComboBox>
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Style" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,5"/>
+                                            <ComboBox x:Name="NrStyleBox" SelectedIndex="0">
+                                                <ComboBoxItem Content="Standard"/>
+                                                <ComboBoxItem Content="Natural"/>
+                                                <ComboBoxItem Content="Cinematic"/>
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="Passes" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,5"/>
+                                            <ComboBox x:Name="NrPassesBox" SelectedIndex="0" ToolTip="Each pass adds the network's whole cost. A change rebuilds the network.">
+                                                <ComboBoxItem Content="1"/>
+                                                <ComboBoxItem Content="2"/>
+                                                <ComboBoxItem Content="3"/>
+                                                <ComboBoxItem Content="4"/>
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <CheckBox x:Name="NrStyleGradeBox" Content="Style grade (Natural / Cinematic)" Margin="0,2,0,6" ToolTip="Grades Natural and Cinematic after the network, as NVIDIA's DLL does"/>
+                                    <CheckBox x:Name="NrAutoMaskBox" Content="Auto mask (skin keeps its own structure)" Margin="0,0,0,6"/>
+                                    <CheckBox x:Name="NrTemporalBox" Content="Temporal history (NRLive motion vectors)" Margin="0,0,0,6"/>
+                                    <CheckBox x:Name="NrAcoBox" Content="ACO machine code (restart NRLive to change)" Margin="0,0,0,6"/>
+                                    <CheckBox x:Name="NrInt4Box" Content="int4 mixed (Original model, ACO, dlssnr-int4.bin)" ToolTip="Faster, the picture slightly different. Needs dlssnr-amd\dlssnr-int4.bin from an OpenNR install."/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="Intensity" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrIntensitySlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrIntensitySlider" Minimum="0" Maximum="2" Value="1" SmallChange="0.05" LargeChange="0.25" Margin="0,0,0,10"/>
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="Local tone" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrLocalToneSlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrLocalToneSlider" Minimum="0" Maximum="2" Value="1" SmallChange="0.05" LargeChange="0.25" Margin="0,0,0,10"/>
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="Local structure" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrStructureSlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrStructureSlider" Minimum="0" Maximum="2" Value="1" SmallChange="0.05" LargeChange="0.25" Margin="0,0,0,10"/>
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="Skin structure (-1 = model's own)" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrSkinSlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrSkinSlider" Minimum="-1" Maximum="1" Value="-1" SmallChange="0.05" LargeChange="0.25" Margin="0,0,0,10"/>
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="Colour strength" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrColourSlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrColourSlider" Minimum="0" Maximum="1" Value="1" SmallChange="0.05" LargeChange="0.25" Margin="0,0,0,10"/>
+                                    <Grid Margin="0,0,0,2"><TextBlock Text="History strength" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock Text="{Binding Value, ElementName=NrHistorySlider, StringFormat={}{0:0.00}}" HorizontalAlignment="Right" FontSize="11"/></Grid>
+                                    <Slider x:Name="NrHistorySlider" Minimum="0" Maximum="1" Value="1" SmallChange="0.05" LargeChange="0.25"/>
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="The OpenNR settings apply live while NRLive runs. They are saved in scaleconfig.ini [OpenNR] under OptiScaler's Mochizuki* key names; the other RenoDX keys can be added there by hand. The 0.0.6 bridge keeps its own settings in the overlay." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="11" Margin="0,12,0,0"/>
+                        </StackPanel>
+                    </Border>
                     <Border Background="#1B1E23" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,14,0,0">
                         <TextBlock x:Name="CommandPreview" Text="NRLive.exe --mv fast" FontFamily="Cascadia Code, Consolas" FontSize="11" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"/>
                     </Border>

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <fstream>
+#include <vector>
 
 // CRITICAL for OptiScaler:
 // Call ffxCreateContext / ffxDispatch ONLY through the module OptiScaler hooks
@@ -125,13 +126,55 @@ static bool ensure()
   return g_ffx.CreateContext && g_ffx.Dispatch;
 }
 
-bool Fsr::init(ID3D12Device* device, Size maxRender, Size maxDisplay)
+static std::wstring widen(const char* s)
 {
+  std::wstring w;
+  for (; s && *s; ++s) w += static_cast<wchar_t>(static_cast<unsigned char>(*s));
+  return w;
+}
+
+bool Fsr::init(ID3D12Device* device, Size maxRender, Size maxDisplay, const UpscalerInfo& choice)
+{
+  m_provider.clear();
   if (!device) { m_error = L"null device"; return false; }
+  if (!choice.ffx) { m_error = L"no FFX upscaler for this choice"; return false; }
   if (!ensure()) {
     m_error = L"FFX missing (" + g_info + L"). Place amd_fidelityfx_dx12.dll "
               L"or OptiScaler\\amd_fidelityfx_loader_dx12.dll next to the EXE.";
     return false;
+  }
+
+  // Ask the loader which upscaler providers it has and pick the wanted one.
+  // An older or hooked loader that cannot list them keeps its default.
+  ffxOverrideVersion override{};
+  override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+  std::wstring offered;
+  bool picked = false;
+  {
+    uint64_t count = 0;
+    ffxQueryDescGetVersions q{};
+    q.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    q.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+    q.device = device;
+    q.outputCount = &count;
+    if (g_ffx.Query && g_ffx.Query(nullptr, &q.header) == FFX_API_RETURN_OK && count) {
+      std::vector<uint64_t> ids(count);
+      std::vector<const char*> names(count);
+      q.versionIds = ids.data();
+      q.versionNames = names.data();
+      if (g_ffx.Query(nullptr, &q.header) == FFX_API_RETURN_OK) {
+        for (uint64_t i = 0; i < count; ++i) {
+          if (!offered.empty()) offered += L", ";
+          offered += widen(names[i]);
+          if (!picked && upscalerMatchesProvider(choice, names[i])) {
+            override.versionId = ids[i];
+            picked = true;
+          }
+        }
+      }
+    }
+    logFfx(L"FFX upscaler providers: " + (offered.empty() ? std::wstring(L"(not listed)") : offered) +
+           L"; wanted " + choice.label + (picked ? L"" : L" (not offered, using the loader's default)"));
   }
 
   ffxCreateBackendDX12Desc backend{};
@@ -145,6 +188,10 @@ bool Fsr::init(ID3D12Device* device, Size maxRender, Size maxDisplay)
   upVersion.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
   upVersion.version = FFX_UPSCALER_VERSION;
   upVersion.header.pNext = &backend.header;
+  if (picked) {
+    override.header.pNext = &backend.header;
+    upVersion.header.pNext = &override.header;
+  }
   up.header.pNext = &upVersion.header;
   up.maxRenderSize = { maxRender.w, maxRender.h };
   up.maxUpscaleSize = { maxDisplay.w, maxDisplay.h };
@@ -170,7 +217,15 @@ bool Fsr::init(ID3D12Device* device, Size maxRender, Size maxDisplay)
       m_jitterPhases = phaseCount;
   }
 
-  m_error = L"OK " + g_info;
+  if (g_ffx.Query) {
+    ffxQueryGetProviderVersion pv{};
+    pv.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    if (g_ffx.Query(&m_ctx, &pv.header) == FFX_API_RETURN_OK && pv.versionName)
+      m_provider = widen(pv.versionName);
+  }
+  m_error = L"OK " + g_info + (m_provider.empty() ? L"" : L" [" + m_provider + L"]") +
+            (picked ? L"" : std::wstring(L" (") + choice.label + L" not offered)");
+  logFfx(L"FFX upscaler context on " + (m_provider.empty() ? std::wstring(L"unknown provider") : m_provider));
   return true;
 }
 

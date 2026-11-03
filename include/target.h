@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include "upscaler.h"
 
 enum class TargetMode { Picker, Pid, Window, Process };
 
@@ -19,6 +20,7 @@ struct TargetSpec {
   CaptureMode captureMode = CaptureMode::WgcWindow;
   MotionMode motionMode = MotionMode::Fast;
   std::wstring motionModeText = L"fast";
+  UpscalerKind upscaler = UpscalerKind::Fsr4;
   // Optional CSV trace for comparing capture, render CPU, and present cadence.
   std::wstring tracePath;
   UINT stopHotkeyModifiers = MOD_CONTROL | MOD_SHIFT;
