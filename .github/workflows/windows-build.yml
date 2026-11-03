@@ -18,53 +18,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  opennr-runtime:
-    name: Download OpenNR runtime from GitLab
+  dlssnr-runtime:
+    name: Download DLSSNR-AMD runtime package
     runs-on: ubuntu-latest
     steps:
-      - name: Download and stage GitLab OpenNR runtime
+      - name: Download and stage public GitLab DLSSNR-AMD package
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/opennr-runtime.zip"
-          extracted="$RUNNER_TEMP/opennr-runtime-extracted"
-          mkdir -p "$extracted" build/opennr-runtime
+          archive="$RUNNER_TEMP/dlssnr-amd-runtime.zip"
+          extracted="$RUNNER_TEMP/dlssnr-amd-runtime"
+          mkdir -p "$extracted" build/dlssnr-runtime
           runtime_url="https://gitlab.com/api/v4/projects/88319462/packages/generic/dlssnr-amd/0.0.8.2/DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip"
           curl --location --fail --retry 5 --retry-delay 3 \
             --output "$archive" "$runtime_url"
           unzip -q "$archive" -d "$extracted"
-          runtime_dll="$(find "$extracted" -type f -name 'MochizukiNrRuntime.dll' -print -quit)"
-          if [ -z "$runtime_dll" ]; then
-            echo "::error::The GitLab runtime archive does not contain MochizukiNrRuntime.dll."
-            find "$extracted" -maxdepth 4 -type f | sort | head -n 100
-            exit 1
-          fi
-          runtime_root="$(dirname "$runtime_dll")"
-          cp -a "$runtime_root/." build/opennr-runtime/
-          echo "Prepared OpenNR runtime input:"
-          find build/opennr-runtime -maxdepth 2 -type f | sort | head -n 100
-          du -sh build/opennr-runtime
-      - name: Upload OpenNR runtime input
+          cp -a "$extracted/." build/dlssnr-runtime/
+          echo "Staged public DLSSNR-AMD package:"
+          find build/dlssnr-runtime -maxdepth 3 -type f | sort | head -n 100 || true
+          du -sh build/dlssnr-runtime
+
+      - name: Upload DLSSNR-AMD runtime package
         uses: actions/upload-artifact@v4
         with:
-          name: NRLive-opennr-runtime
-          path: build/opennr-runtime/**
+          name: NRLive-dlssnr-amd-runtime
+          path: build/dlssnr-runtime/**
           if-no-files-found: error
 
   build:
     name: Build + tests (FSR SDK 2.3.0)
-    needs: opennr-runtime
+    needs: dlssnr-runtime
     runs-on: windows-2022
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download DLSSNR-AMD 0.0.8.2 runtime
+      - name: Download DLSSNR-AMD runtime package
         uses: actions/download-artifact@v4
         with:
-          name: NRLive-opennr-runtime
-          path: build/opennr-runtime
+          name: NRLive-dlssnr-amd-runtime
+          path: build/dlssnr-runtime
 
       - name: Set up .NET 10 for the Windows launcher
         uses: actions/setup-dotnet@v4
@@ -123,8 +117,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $openNrRuntime = (Resolve-Path "build/opennr-runtime").Path
-          cmake -S . -B build -A x64 "-DFFX_SDK=$env:FFX_SDK" "-DFFX_BIN=$env:FFX_BIN" "-DOPENNR_RUNTIME=$openNrRuntime" -DBUILD_TESTING=ON
+          cmake -S . -B build -A x64 "-DFFX_SDK=$env:FFX_SDK" "-DFFX_BIN=$env:FFX_BIN" -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
@@ -164,9 +157,8 @@ jobs:
 
           Copy-Item "version.txt" "$package/version.txt" -Force
 
-          # Package the GitLab DLSSNR-AMD 0.0.8.2 runtime via OpenNR.
-          Copy-Item "build/Release/opennr" $package -Recurse -Force
-          Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
+          # Preserve the complete directory structure from the public GitLab package.
+          Copy-Item "build/dlssnr-runtime/*" $package -Recurse -Force
 
           foreach ($file in @(
             "NRLiveUI.exe",
