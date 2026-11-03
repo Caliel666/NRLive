@@ -1,6 +1,8 @@
 #include "overlay.h"
 #include "frame_limiter_math.h"
 #include "nr_status.h"
+#include "hud.h"
+#include <dwmapi.h>
 #include <windowsx.h>
 #include <shlobj.h>
 #include <commdlg.h>
@@ -9,39 +11,34 @@
 #include <cwchar>
 #include <string>
 #include <vector>
-#include <deque>
 #include <cstring>
 
 // ============================================================================
-// NRLive overlay — dark charcoal + red brand accent
+// NRLive overlay — OpenNR look: near-black panels, dark red title, red accent
 // ============================================================================
 
 static constexpr int BTN_SIZE = 56, BTN_GAP = 10, BAR_PAD = 12;
-static constexpr int FT_SAMPLES = 200, FT_HEIGHT = 50, FT_RANGE = 50;
 
-// ── Design colors (AMD-NR ReShade Installer design language) ──────────────
-static constexpr COLORREF C_WIN      = RGB(26,26,29);     // #1A1A1D
-static constexpr COLORREF C_DARK     = RGB(20,20,22);     // #141416
-static constexpr COLORREF C_CARD     = RGB(36,36,40);      // #242428
-static constexpr COLORREF C_CARD2    = RGB(30,30,33);     // #1E1E21
-static constexpr COLORREF C_HOVER    = RGB(63,63,70);      // #3F3F46
-static constexpr COLORREF C_INPUT    = RGB(38,38,44);      // #26262C
-static constexpr COLORREF C_GHOST    = RGB(42,42,46);      // #2A2A2E
-static constexpr COLORREF C_RED      = RGB(181,108,255);   // launcher purple #B56CFF
-static constexpr COLORREF C_RED_HOT   = RGB(201,149,255);   // lighter purple hover
-static constexpr COLORREF C_RED_TINT = RGB(57,45,69);      // muted purple panel
-static constexpr COLORREF C_GREEN    = RGB(34,197,94);     // #22C55E
-static constexpr COLORREF C_TEXT     = RGB(232,232,232);   // #E8E8E8
-static constexpr COLORREF C_DIM      = RGB(139,139,139);   // #8B8B8B
-static constexpr COLORREF C_MUTED    = RGB(107,107,107);   // #6B6B6B
-static constexpr COLORREF C_FPS_BG   = RGB(2,2,2);       // MangoHud near-black
+// ── Design colors (OpenNR: OptiScaler menu + installer) ───────────────────
+static constexpr COLORREF C_WIN      = RGB(20,20,22);      // #141416
+static constexpr COLORREF C_DARK     = RGB(110,13,19);     // #6E0D13 dark red title bar
+static constexpr COLORREF C_CARD2    = RGB(42,42,46);      // #2A2A2E separators
+static constexpr COLORREF C_HOVER    = RGB(52,52,58);      // #34343A
+static constexpr COLORREF C_INPUT    = RGB(30,30,34);      // #1E1E22
+static constexpr COLORREF C_GHOST    = RGB(35,35,39);      // #232327
+static constexpr COLORREF C_RED      = RGB(237,28,36);     // #ED1C24 OpenNR accent
+static constexpr COLORREF C_RED_HOT  = RGB(255,77,84);     // #FF4D54
+static constexpr COLORREF C_RED_TINT = RGB(58,18,20);      // #3A1214 active button
+static constexpr COLORREF C_TAB      = RGB(76,10,14);      // #4C0A0E inactive tab on the title bar
+static constexpr COLORREF C_TEXT     = RGB(236,236,238);   // #ECECEE
+static constexpr COLORREF C_DIM      = RGB(150,150,158);   // #96969E
+static constexpr COLORREF C_MUTED    = RGB(110,110,118);   // #6E6E76
 
 // ── State ─────────────────────────────────────────────────────────────────
 static const wchar_t* UI_CLS = L"NRLiveOverlayUI";
-static const wchar_t* FPS_CLS = L"NRLiveMangoHud";
 static const wchar_t* SET_CLS = L"NRLiveSettings";
 
-static HWND g_output = nullptr, g_ui = nullptr, g_fps = nullptr;
+static HWND g_output = nullptr, g_ui = nullptr;
 static HWND g_settings = nullptr, g_pathEdit = nullptr;
 static HINSTANCE g_inst = nullptr;
 static bool g_open = false, g_fsr = true, g_fpsVisible = true;
@@ -52,22 +49,17 @@ static bool g_fgEnabled = false;
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static bool g_dlssNrTab = false;
+static bool g_hudTab = false;
 static OverlayDlssNrConfig g_dlssNr{};
 static float g_sharpness = 0.65f;
 static OverlayHudConfig g_cfg{};
 static std::wstring g_shotPath;
 static std::wstring g_saveStatus = L"Changes are saved automatically";
-static float g_lastFps = 0, g_lastMs = 0;
-static float g_smoothFps = 0, g_smoothMs = 0;
-static std::deque<float> g_frameSamples;
-static float g_sampleSumMs = 0.0f;
-static RECT g_fpsRect{};
-static int g_fpsW = 0, g_fpsH = 0;
-static Size g_cap{}, g_out{};
-static float g_ftBuf[FT_SAMPLES] = {};
-static int g_ftIdx = 0;
-static float g_ftMin = 999, g_ftMax = 0;
 static int g_hoverBtn = -1;
+static UINT g_toggleMods = 0, g_toggleVk = 0, g_presetMods = 0, g_presetVk = 0;
+static bool g_toggleDown = false, g_presetDown = false;
+static FILETIME g_iniTime{};
+static ULONGLONG g_iniCheckAt = 0;
 
 // ── Config (scaleconfig.ini) ──────────────────────────────────────────────
 static std::wstring iniPath() {
@@ -97,36 +89,20 @@ static void loadCfg() {
   g_dlssNr.stabilizer = GetPrivateProfileIntW(L"DLSSNR", L"stabilizer", 1, ini.c_str()) != 0;
   g_dlssNr.passes = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"passes", 1, ini.c_str()), 1, 3);
   g_sharpness = std::clamp(GetPrivateProfileIntW(L"FSR", L"sharpness", 65, ini.c_str()) / 100.0f, 0.0f, 1.0f);
-  g_cfg.fps = GetPrivateProfileIntW(L"FPS", L"fps", 1, ini.c_str()) != 0;
-  g_cfg.frametime = GetPrivateProfileIntW(L"FPS", L"frametime", 1, ini.c_str()) != 0;
-  g_cfg.frame_timing = GetPrivateProfileIntW(L"FPS", L"frame_timing", 1, ini.c_str()) != 0;
-  g_cfg.resolution = GetPrivateProfileIntW(L"FPS", L"resolution", 1, ini.c_str()) != 0;
-  g_cfg.background = GetPrivateProfileIntW(L"FPS", L"background", 1, ini.c_str()) != 0;
-  g_cfg.text_outline = GetPrivateProfileIntW(L"FPS", L"text_outline", 1, ini.c_str()) != 0;
-  g_cfg.fontSize = (int)std::clamp<long>(GetPrivateProfileIntW(L"FPS", L"font_size", 24, ini.c_str()), 12, 48);
-  g_cfg.position = (int)std::clamp<long>(GetPrivateProfileIntW(L"FPS", L"position", 0, ini.c_str()), 0, 3);
-  int alphaRaw = GetPrivateProfileIntW(L"FPS", L"background_alpha", 50, ini.c_str());
-  g_cfg.background_alpha = std::clamp(alphaRaw, 0, 100) / 100.0f;
+  loadHudConfig(ini, g_cfg);
   // Default screenshot path: Pictures\NRLive
   wchar_t path[MAX_PATH * 4]{};
   GetPrivateProfileStringW(L"General", L"screenshot_path", L"", path, MAX_PATH * 4, ini.c_str());
   if (path[0]) g_shotPath = path;
   else { SHGetFolderPathW(nullptr, CSIDL_MYPICTURES, nullptr, SHGFP_TYPE_CURRENT, path); g_shotPath = path; if (!g_shotPath.empty() && g_shotPath.back() != L'\\') g_shotPath += L'\\'; g_shotPath += L"NRLive"; }
+  WIN32_FILE_ATTRIBUTE_DATA fa{};
+  if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &fa)) g_iniTime = fa.ftLastWriteTime;
 }
 
 static void saveCfg() {
   const std::wstring ini = iniPath();
   WritePrivateProfileStringW(L"FPS", L"enabled", g_fpsVisible ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"fps", g_cfg.fps ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"frametime", g_cfg.frametime ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"frame_timing", g_cfg.frame_timing ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"resolution", g_cfg.resolution ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"background", g_cfg.background ? L"1" : L"0", ini.c_str());
-  WritePrivateProfileStringW(L"FPS", L"text_outline", g_cfg.text_outline ? L"1" : L"0", ini.c_str());
-  wchar_t b[32];
-  swprintf_s(b, L"%d", g_cfg.fontSize);  WritePrivateProfileStringW(L"FPS", L"font_size", b, ini.c_str());
-  swprintf_s(b, L"%d", g_cfg.position);  WritePrivateProfileStringW(L"FPS", L"position", b, ini.c_str());
-  swprintf_s(b, L"%d", (int)std::lround(g_cfg.background_alpha * 100.0f)); WritePrivateProfileStringW(L"FPS", L"background_alpha", b, ini.c_str());
+  saveHudConfig(ini, g_cfg);
   WritePrivateProfileStringW(L"General", L"screenshot_path", g_shotPath.c_str(), ini.c_str());
   WritePrivateProfileStringW(L"FrameLimiter", L"enabled", g_frameLimit.enabled ? L"1" : L"0", ini.c_str());
   wchar_t limitValue[32]{};
@@ -150,6 +126,16 @@ static void saveCfg() {
   swprintf_s(nrValue, L"%d", std::clamp(g_dlssNr.passes, 1, 3)); WritePrivateProfileStringW(L"DLSSNR", L"passes", nrValue, ini.c_str());
   wchar_t sharpnessValue[16]{}; swprintf_s(sharpnessValue, L"%d", (int)std::lround(g_sharpness * 100.0f));
   WritePrivateProfileStringW(L"FSR", L"sharpness", sharpnessValue, ini.c_str());
+  WIN32_FILE_ATTRIBUTE_DATA fa{};
+  if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &fa)) g_iniTime = fa.ftLastWriteTime;
+}
+
+// Hand the current HUD settings to the HUD thread and refresh hotkeys.
+static void pushHud() {
+  if (!parseHudHotkey(g_cfg.toggle_key, g_toggleMods, g_toggleVk)) g_toggleVk = 0;
+  if (!parseHudHotkey(g_cfg.preset_key, g_presetMods, g_presetVk)) g_presetVk = 0;
+  hudSetConfig(g_cfg);
+  hudSetEnabled(g_fpsVisible);
 }
 
 // ── GDI helpers ───────────────────────────────────────────────────────────
@@ -244,181 +230,90 @@ static void paintTopBar(HWND h, HDC dc) {
     bool active = (i==0&&g_fsr) || (i==1&&g_fpsVisible) || (i==3&&g_frameLimit.enabled) || (i==4&&g_fgEnabled) || (i==5&&g_dlssNr.enabled) || (i==6&&IsWindowVisible(g_settings));
     bool hot = (g_hoverBtn == i);
     HBRUSH br = CreateSolidBrush(active ? C_RED_TINT : (hot ? C_HOVER : C_GHOST));
-    roundRect(dc, b, 6, br); DeleteObject(br);
+    roundRect(dc, b, 8, br); DeleteObject(br);
+    if (active) { // red underline, like the OpenNR menu's selected item
+      HBRUSH ab = CreateSolidBrush(C_RED); RECT u{b.left + 14, b.bottom - 4, b.right - 14, b.bottom - 2};
+      FillRect(dc, &u, ab); DeleteObject(ab);
+    }
     drawBtnIcon(dc, b, i, active);
   }
 }
 
-// ── FPS overlay paint (double-buffered GDI — fast, no UpdateLayeredWindow) ─
-static void paintFpsContent(HDC dc, int w, int h) {
-  // Draw the HUD into a 32-bit DIB.  Background pixels retain their own
-  // alpha so the background slider does not fade the text with it.
-  if (g_cfg.background) {
-    BYTE a = (BYTE)std::clamp((int)std::lround(g_cfg.background_alpha * 255.0f), 0, 255);
-    DWORD bg = ((DWORD)a << 24) | ((DWORD)GetRValue(C_FPS_BG) << 16) |
-               ((DWORD)GetGValue(C_FPS_BG) << 8) | GetBValue(C_FPS_BG);
-    DWORD* px = (DWORD*)nullptr;
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = w;
-    bi.bmiHeader.biHeight = -h;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    // This function is only used with the DIB DC created by fpsProc;
-    // clear it through GDI so the caller remains responsible for the bits.
-    RECT rc{0,0,w,h};
-    HBRUSH b = CreateSolidBrush(C_FPS_BG);
-    FillRect(dc, &rc, b);
-    DeleteObject(b);
-  }
+// ── HUD tab model ────────────────────────────────────────────────────────
+struct HudItem { const wchar_t* name; bool OverlayHudConfig::* field; };
+static const HudItem kHudItems[] = {
+  {L"Title", &OverlayHudConfig::title}, {L"FPS", &OverlayHudConfig::fps},
+  {L"Src / gen FPS", &OverlayHudConfig::fps_detail}, {L"Frametime", &OverlayHudConfig::frametime},
+  {L"Frametime graph", &OverlayHudConfig::frame_timing}, {L"1% / 0.1% lows", &OverlayHudConfig::lows},
+  {L"GPU load", &OverlayHudConfig::gpu_load}, {L"GPU clock", &OverlayHudConfig::gpu_clock},
+  {L"GPU temp", &OverlayHudConfig::gpu_temp}, {L"VRAM", &OverlayHudConfig::vram},
+  {L"CPU load", &OverlayHudConfig::cpu_load}, {L"RAM", &OverlayHudConfig::ram},
+  {L"FSR / NR / FG", &OverlayHudConfig::pipeline}, {L"GPU pass times", &OverlayHudConfig::gpu_times},
+  {L"NRLive latency", &OverlayHudConfig::latency}, {L"Resolution", &OverlayHudConfig::resolution},
+  {L"Clock", &OverlayHudConfig::clock},
+};
+static constexpr int kHudItemCount = (int)(sizeof(kHudItems) / sizeof(kHudItems[0]));
+static constexpr int ID_PRESET = 701, ID_ITEM = 710, ID_LAYOUT = 730, ID_POSITION = 731, ID_BG = 732, ID_OUTLINE = 733;
+static constexpr int ID_SLIDER = 740, ID_SLIDER_VALUE = 750, ID_SLIDER_LABEL = 760, ID_COLOR = 770;
+static const wchar_t* kPositionNames[] = {L"Top left", L"Top right", L"Bottom left", L"Bottom right", L"Top centre", L"Bottom centre"};
+static RECT presetRect(int i) { return {24 + i * 106, 84, 24 + i * 106 + 98, 112}; }
+static RECT itemRect(int i) { return {24 + (i % 3) * 144, 152 + (i / 3) * 26, 24 + (i % 3) * 144 + 140, 152 + (i / 3) * 26 + 22}; }
+static constexpr int kHudSliderY = 424, kHudSliderStep = 34;
 
-  int pad = 8, y = pad;
-  int fs = g_cfg.fontSize, smFont = (int)(fs * 0.55f);
-
-  if (g_cfg.fps) {
-    wchar_t buf[64];
-    drawText(dc, L"NRLive", pad, y, smFont, g_cfg.engine_color, g_cfg.text_outline);
-    int labelW = (int)(smFont * 4.5);
-    int numW = 0;
-    if (g_fgActive) {
-      swprintf_s(buf, L"%.0f/%.0f", g_smoothFps * 2.0f, g_smoothFps);
-      drawText(dc, buf, pad+labelW, y, fs, g_cfg.text_color, g_cfg.text_outline);
-      numW = (int)(wcslen(buf)*(fs*0.6));
-      drawText(dc, L"FG", pad+labelW+numW+4, y+(fs-smFont), smFont, g_cfg.text_color, g_cfg.text_outline);
-    } else {
-      swprintf_s(buf, L"%.1f", g_smoothFps);
-      drawText(dc, buf, pad+labelW, y, fs, g_cfg.text_color, g_cfg.text_outline);
-      numW = buf[0] ? (int)(wcslen(buf)*(fs*0.6)) : 0;
-      drawText(dc, L"FPS", pad+labelW+numW+4, y+(fs-smFont), smFont, g_cfg.text_color, g_cfg.text_outline);
-    }
-    if (g_cfg.frametime) {
-      int ftX = pad+labelW+numW+(int)(smFont*4.5);
-      swprintf_s(buf, L"%.1f", g_smoothMs);
-      drawText(dc, buf, ftX, y, fs, g_cfg.text_color, g_cfg.text_outline);
-      drawText(dc, L"ms", ftX+(int)(wcslen(buf)*fs*0.6)+2, y+(fs-smFont), smFont, g_cfg.text_color, g_cfg.text_outline);
-    }
-    y += fs + 8;
-  } else if (g_cfg.frametime) {
-    wchar_t buf[64]; swprintf_s(buf, L"%.1f ms", g_smoothMs);
-    drawText(dc, buf, pad, y, smFont, g_cfg.text_color, g_cfg.text_outline);
-    y += smFont + 8;
-  }
-
-  int graphH = g_cfg.frame_timing ? FT_HEIGHT : 0;
-  int graphW = w - pad * 2;
-  if (graphH > 0 && graphW > 10) {
-    wchar_t buf[80];
-    drawText(dc, L"Frametime", pad, y, smFont, g_cfg.engine_color, g_cfg.text_outline);
-    swprintf_s(buf, L"min: %.1fms  max: %.1fms", g_ftMin, g_ftMax);
-    drawText(dc, buf, pad+(int)(smFont*5), y, smFont, g_cfg.text_color, g_cfg.text_outline);
-    y += smFont + 4;
-    HPEN pen = CreatePen(PS_SOLID, 1, g_cfg.frametime_color);
-    auto op = (HPEN)SelectObject(dc, pen);
-    int n = std::min(FT_SAMPLES, graphW);
-    for (int i = 0; i < n; ++i) {
-      int idx = (g_ftIdx - n + i + FT_SAMPLES) % FT_SAMPLES;
-      float v = std::clamp(g_ftBuf[idx], 0.0f, (float)FT_RANGE);
-      int px = pad + i;
-      int py = y + graphH - 1 - (int)((v / (float)FT_RANGE) * (graphH - 1));
-      if (i == 0) MoveToEx(dc, px, py, nullptr); else LineTo(dc, px, py);
-    }
-    SelectObject(dc, op); DeleteObject(pen);
-    y += graphH + 4;
-  }
-
-  if (g_cfg.resolution) {
-    wchar_t buf[64]; swprintf_s(buf, L"%ux%u", g_cap.w, g_cap.h);
-    drawText(dc, buf, pad, y, smFont, g_cfg.text_color, g_cfg.text_outline);
+struct HudSlider { const wchar_t* label; int lo, hi; };
+static const HudSlider kHudSliders[] = {
+  {L"Scale", 50, 250}, {L"Opacity", 20, 100}, {L"Background", 0, 100}, {L"Graph history", 30, 1000}, {L"Refresh (ms)", 100, 2000}};
+static int hudSliderValue(int i) {
+  switch (i) {
+    case 0: return g_cfg.scale;
+    case 1: return (int)std::lround(g_cfg.opacity * 100);
+    case 2: return (int)std::lround(g_cfg.background_alpha * 100);
+    case 3: return g_cfg.graph_samples;
+    default: return g_cfg.sample_ms;
   }
 }
-
-static void renderFpsLayered() {
-  if (!g_fps || !IsWindow(g_fps) || !g_fpsVisible) return;
-  RECT rc{}; GetClientRect(g_fps, &rc);
-  int w = rc.right, h = rc.bottom;
-  if (w <= 0 || h <= 0) return;
-
-  HDC screen = GetDC(nullptr);
-  HDC mem = CreateCompatibleDC(screen);
-  BITMAPINFO bi{};
-  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bi.bmiHeader.biWidth = w;
-  bi.bmiHeader.biHeight = -h;
-  bi.bmiHeader.biPlanes = 1;
-  bi.bmiHeader.biBitCount = 32;
-  bi.bmiHeader.biCompression = BI_RGB;
-  void* bits = nullptr;
-  HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-  if (!bmp) { DeleteDC(mem); ReleaseDC(nullptr, screen); return; }
-  HBITMAP old = (HBITMAP)SelectObject(mem, bmp);
-
-  // Start fully transparent. paintFpsContent only draws opaque text/graph.
-  std::memset(bits, 0, (size_t)w * h * 4);
-  paintFpsContent(mem, w, h);
-
-  // Convert the GDI-painted pixels into ARGB: background gets configured
-  // alpha; all foreground pixels remain fully opaque.
-  DWORD* px = (DWORD*)bits;
-  BYTE bgR = GetRValue(C_FPS_BG), bgG = GetGValue(C_FPS_BG), bgB = GetBValue(C_FPS_BG);
-  BYTE bgA = (BYTE)std::clamp((int)std::lround(g_cfg.background_alpha * 255.0f), 0, 255);
-  for (int i = 0; i < w*h; ++i) {
-    BYTE* p = ((BYTE*)px) + i*4;
-    bool isBg = p[0] == bgB && p[1] == bgG && p[2] == bgR;
-    p[3] = (g_cfg.background && isBg) ? bgA : (isBg ? 0 : 255);
+static void setHudSliderValue(int i, int v) {
+  switch (i) {
+    case 0: g_cfg.scale = v; break;
+    case 1: g_cfg.opacity = v / 100.0f; break;
+    case 2: g_cfg.background_alpha = v / 100.0f; break;
+    case 3: g_cfg.graph_samples = v; break;
+    default: g_cfg.sample_ms = v; break;
   }
-
-  POINT dst{g_fpsRect.left, g_fpsRect.top}, src{0,0};
-  SIZE size{w,h};
-  BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-  UpdateLayeredWindow(g_fps, screen, &dst, &size, mem, &src, 0, &blend, ULW_ALPHA);
-
-  SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem); ReleaseDC(nullptr, screen);
+}
+static void hudSliderText(int i, wchar_t* out, size_t n) {
+  const int v = hudSliderValue(i);
+  if (i <= 2) swprintf_s(out, n, L"%d%%", v);
+  else swprintf_s(out, n, L"%d", v);
 }
 
-static void updateFpsPos() {
-  if (!g_fps || !IsWindow(g_fps) || !g_output) return;
-  if (!g_fpsVisible) { ShowWindow(g_fps, SW_HIDE); return; }
-
-  int dynW = std::max(210, g_cfg.fontSize * 10);
-  int fs = g_cfg.fontSize, smFont = (int)(fs * 0.55f);
-  int totalH = 8;
-  if (g_cfg.fps) totalH += fs + 8;
-  else if (g_cfg.frametime) totalH += smFont + 8;
-  if (g_cfg.frame_timing) totalH += smFont + 4 + FT_HEIGHT + 4;
-  if (g_cfg.resolution) totalH += smFont + 4;
-  totalH += 8;
-
-  RECT o{}; GetWindowRect(g_output, &o);
-  int x = o.left + 10, y = o.top + 10;
-  if (g_cfg.position == 1) x = o.right - dynW - 10;
-  if (g_cfg.position == 2) y = o.bottom - totalH - 10;
-  if (g_cfg.position == 3) { x = o.right - dynW - 10; y = o.bottom - totalH - 10; }
-  RECT nr{x,y,x+dynW,y+totalH};
-  bool changed = std::memcmp(&nr, &g_fpsRect, sizeof(RECT)) != 0 ||
-                 g_fpsW != dynW || g_fpsH != totalH;
-  if (changed) {
-    g_fpsRect = nr; g_fpsW = dynW; g_fpsH = totalH;
-    SetWindowPos(g_fps, HWND_TOPMOST, x, y, dynW, totalH,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-  } else if (!IsWindowVisible(g_fps)) {
-    ShowWindow(g_fps, SW_SHOWNOACTIVATE);
+// Push every HUD control on the settings panel to the current config.
+static void syncHudControls() {
+  if (!g_settings) return;
+  for (int i = 0; i < 5; ++i) {
+    SendMessageW(GetDlgItem(g_settings, ID_SLIDER + i), TBM_SETPOS, TRUE, hudSliderValue(i));
+    wchar_t b[16]; hudSliderText(i, b, 16);
+    SetWindowTextW(GetDlgItem(g_settings, ID_SLIDER_VALUE + i), b);
   }
-  renderFpsLayered();
+  InvalidateRect(g_settings, nullptr, FALSE);
 }
 
 static void paintSettings(HWND h, HDC dc) {
   RECT rc{}; GetClientRect(h, &rc);
   HBRUSH bg = CreateSolidBrush(C_WIN); FillRect(dc, &rc, bg); DeleteObject(bg);
   HBRUSH tb = CreateSolidBrush(C_DARK); RECT tr{0,0,rc.right,48}; FillRect(dc,&tr,tb); DeleteObject(tb);
+  HBRUSH tl = CreateSolidBrush(C_RED); RECT tline{0,46,rc.right,48}; FillRect(dc,&tline,tl); DeleteObject(tl);
   HFONT title=makeFont(18,true); auto old=(HFONT)SelectObject(dc,title); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,C_TEXT);
   RECT rt{24,10,rc.right-24,40}; DrawTextW(dc,L"NRLive Settings",-1,&rt,DT_LEFT|DT_VCENTER|DT_SINGLELINE); SelectObject(dc,old); DeleteObject(title);
   auto section=[&](const wchar_t* s,int y){HFONT f=makeFont(12,true);auto o=(HFONT)SelectObject(dc,f);SetTextColor(dc,C_RED);RECT r{24,y,rc.right-24,y+18};DrawTextW(dc,s,-1,&r,DT_LEFT|DT_VCENTER|DT_SINGLELINE);HPEN p=CreatePen(PS_SOLID,1,C_CARD2);auto op=(HPEN)SelectObject(dc,p);MoveToEx(dc,24,y+21,nullptr);LineTo(dc,rc.right-24,y+21);SelectObject(dc,op);DeleteObject(p);SelectObject(dc,o);DeleteObject(f);};
-  RECT tabGeneral{244, 10, 336, 38}, tabNr{344, 10, 456, 38};
-  HBRUSH tg = CreateSolidBrush(g_dlssNrTab ? C_GHOST : C_RED_TINT); FillRect(dc, &tabGeneral, tg); DeleteObject(tg);
-  HBRUSH tn = CreateSolidBrush(g_dlssNrTab ? C_RED_TINT : C_GHOST); FillRect(dc, &tabNr, tn); DeleteObject(tn);
-  drawText(dc, L"General", 260, 16, 12, C_TEXT, false);
-  drawText(dc, L"DLSSNR", 370, 16, 12, C_TEXT, false);
+  RECT tabGeneral{200, 10, 280, 38}, tabHud{286, 10, 350, 38}, tabNr{356, 10, 456, 38};
+  const bool generalTab = !g_dlssNrTab && !g_hudTab;
+  HBRUSH tg = CreateSolidBrush(generalTab ? C_RED : C_TAB); roundRect(dc, tabGeneral, 8, tg); DeleteObject(tg);
+  HBRUSH th = CreateSolidBrush(g_hudTab ? C_RED : C_TAB); roundRect(dc, tabHud, 8, th); DeleteObject(th);
+  HBRUSH tn = CreateSolidBrush(g_dlssNrTab ? C_RED : C_TAB); roundRect(dc, tabNr, 8, tn); DeleteObject(tn);
+  drawText(dc, L"General", 216, 16, 12, C_TEXT, false);
+  drawText(dc, L"HUD", 306, 16, 12, C_TEXT, false);
+  drawText(dc, L"DLSSNR", 382, 16, 12, C_TEXT, false);
   if (g_dlssNrTab) {
     section(L"DLSSNR - BEFORE FSR", 58);
     wchar_t value[80]{};
@@ -440,21 +335,22 @@ static void paintSettings(HWND h, HDC dc) {
     drawText(dc, nrStatusLine().c_str(), 24, 725, 10, C_TEXT, false);
     return;
   }
-  section(L"FPS OVERLAY",58);
-  section(L"APPEARANCE",148);
-  section(L"FSR SHARPENING",278);
-  section(L"FRAME LIMITER",352);
-  section(L"SCREENSHOT",424);
-  // Slider labels/values are painted here; the native trackbars remain for interaction.
-  drawText(dc,L"Font size",24,176,13,C_TEXT,false);
-  drawText(dc,L"Bg alpha",24,212,13,C_TEXT,false);
-  drawText(dc,L"Engine",24,248,12,C_DIM,false); drawText(dc,L"Text",130,248,12,C_DIM,false); drawText(dc,L"Graph",224,248,12,C_DIM,false);
-  auto swatch=[&](int x,COLORREF col){HBRUSH br=CreateSolidBrush(col);RECT r{x,246,x+40,268};FillRect(dc,&r,br);DeleteObject(br);HPEN p=CreatePen(PS_SOLID,1,C_HOVER);auto op=(HPEN)SelectObject(dc,p);auto ob=(HBRUSH)SelectObject(dc,GetStockObject(NULL_BRUSH));Rectangle(dc,r.left,r.top,r.right,r.bottom);SelectObject(dc,ob);SelectObject(dc,op);DeleteObject(p);};
-  swatch(80,g_cfg.engine_color);swatch(174,g_cfg.text_color);swatch(268,g_cfg.frametime_color);
-  drawText(dc,L"Sharpening",24,304,13,C_TEXT,false);
-  wchar_t sharp[16]{}; swprintf_s(sharp, L"%.2f", g_sharpness); drawText(dc,sharp,410,304,13,C_RED_HOT,false);
-  drawText(dc,L"Cap FPS",142,378,13,C_TEXT,false);
-  drawText(dc,L"Folder",24,440,13,C_TEXT,false); drawText(dc,g_saveStatus.c_str(),24,564,10,C_MUTED,false);
+  if (g_hudTab) {
+    section(L"PRESET", 58);
+    section(L"ITEMS", 124);
+    section(L"LAYOUT", 312);
+    section(L"COLOURS", 600);
+    wchar_t keys[160]{};
+    swprintf_s(keys, L"Toggle HUD: %s     Next preset: %s", g_cfg.toggle_key.c_str(), g_cfg.preset_key.c_str());
+    drawText(dc, keys, 24, 664, 11, C_DIM, false);
+    drawText(dc, L"Hotkeys and every option are also in the launcher (HUD settings).", 24, 682, 10, C_MUTED, false);
+    drawText(dc, g_saveStatus.c_str(), 24, 704, 10, C_MUTED, false);
+    return;
+  }
+  section(L"FSR SHARPENING",58);
+  section(L"FRAME LIMITER",132);
+  section(L"SCREENSHOT",204);
+  drawText(dc,g_saveStatus.c_str(),24,344,10,C_MUTED,false);
 }
 
 static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -470,7 +366,7 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       RECT b = btnRect(i);
       if (PtInRect(&b, p)) {
         if (i == 0) { g_fsr = !g_fsr; g_toggleFsr = true; }
-        else if (i == 1) { g_fpsVisible = !g_fpsVisible; saveCfg(); updateFpsPos(); }
+        else if (i == 1) { g_fpsVisible = !g_fpsVisible; saveCfg(); hudSetEnabled(g_fpsVisible); }
         else if (i == 2) { g_screenshot = true; }
         else if (i == 3) { g_frameLimit.enabled = !g_frameLimit.enabled; g_toggleFrameLimit = true; saveCfg(); }
         else if (i == 4) { g_fgEnabled = !g_fgEnabled; g_toggleFg = true; saveCfg(); }
@@ -479,6 +375,7 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
           else { int sw=GetSystemMetrics(SM_CXSCREEN), sh=GetSystemMetrics(SM_CYSCREEN);
             wchar_t fpsText[16]{}; swprintf_s(fpsText, L"%d", g_frameLimit.fps); SetWindowTextW(GetDlgItem(g_settings, 206), fpsText);
             SendMessageW(GetDlgItem(g_settings, 207), CB_SETCURSEL, g_frameLimit.method, 0);
+            syncHudControls();
             SetWindowPos(g_settings, HWND_TOPMOST, (sw-480)/2, (sh-740)/2, 480, 740, SWP_NOACTIVATE|SWP_SHOWWINDOW);
             InvalidateRect(g_settings, nullptr, TRUE); } }
         InvalidateRect(h, nullptr, FALSE); UpdateWindow(h); return 0;
@@ -502,36 +399,39 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   }
 }
 
-static LRESULT CALLBACK fpsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-  if (m == WM_NCHITTEST) return HTTRANSPARENT;
-  if (m == WM_ERASEBKGND) return 1;
-  return DefWindowProcW(h, m, w, l);
+static void drawPushButton(DRAWITEMSTRUCT* dis, const wchar_t* label, bool active) {
+  HDC dc = dis->hDC; RECT r = dis->rcItem;
+  HBRUSH bg = CreateSolidBrush(C_WIN); FillRect(dc, &r, bg); DeleteObject(bg);
+  HBRUSH b = CreateSolidBrush(active ? C_RED : C_GHOST); roundRect(dc, r, 8, b); DeleteObject(b);
+  HFONT f = makeFont(12, true); auto old = (HFONT)SelectObject(dc, f);
+  SetBkMode(dc, TRANSPARENT); SetTextColor(dc, active ? RGB(255,255,255) : C_TEXT);
+  DrawTextW(dc, label, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(dc, old); DeleteObject(f);
 }
 
 static void drawOwnerButton(DRAWITEMSTRUCT* dis, const wchar_t* label, bool checked) {
   HDC dc = dis->hDC; RECT r = dis->rcItem;
   HBRUSH bg = CreateSolidBrush(C_WIN); FillRect(dc, &r, bg); DeleteObject(bg);
   RECT box{r.left, r.top+2, r.left+16, r.top+18};
-  HBRUSH b = CreateSolidBrush(checked ? C_RED : C_INPUT); FillRect(dc, &box, b); DeleteObject(b);
+  HBRUSH b = CreateSolidBrush(checked ? C_RED : C_INPUT);
   HPEN p = CreatePen(PS_SOLID, 1, checked ? C_RED_HOT : C_HOVER); auto op=(HPEN)SelectObject(dc,p);
-  auto ob=(HBRUSH)SelectObject(dc,GetStockObject(NULL_BRUSH)); Rectangle(dc,box.left,box.top,box.right,box.bottom);
-  if(checked){MoveToEx(dc,box.left+3,box.top+8,nullptr);LineTo(dc,box.left+7,box.top+12);LineTo(dc,box.right-3,box.top+4);}
-  SelectObject(dc,ob); SelectObject(dc,op); DeleteObject(p);
+  auto ob=(HBRUSH)SelectObject(dc,b); RoundRect(dc,box.left,box.top,box.right,box.bottom,5,5);
+  SelectObject(dc,ob); DeleteObject(b);
+  if(checked){HPEN tick=CreatePen(PS_SOLID,2,RGB(255,255,255));SelectObject(dc,tick);MoveToEx(dc,box.left+4,box.top+8,nullptr);LineTo(dc,box.left+7,box.top+11);LineTo(dc,box.right-4,box.top+5);SelectObject(dc,p);DeleteObject(tick);}
+  SelectObject(dc,op); DeleteObject(p);
   drawText(dc,label,box.right+8,r.top,13,C_TEXT,false);
 }
 
-static void setSettingsTab(HWND h, bool dlssNr) {
+static void setSettingsTab(HWND h, bool dlssNr, bool hud = false) {
   // Native child controls stay visible independently of the parent's custom
-  // paint path. Toggle both complete control sets, not just the NR controls.
-  static constexpr int generalIds[] = {
-    101,102,103,104,105,106,
-    201,202,203,204,205,206,207,208,
-    301,302,303,401,402,403,
-    601,602,603,604,605,606,607,608
-  };
+  // paint path. Toggle complete control sets, not just the active tab's.
+  static constexpr int generalIds[] = {106, 203,204,205,206,207,208, 303, 606,607,608};
   for (int id : generalIds)
     if (HWND control = GetDlgItem(h, id))
-      ShowWindow(control, dlssNr ? SW_HIDE : SW_SHOW);
+      ShowWindow(control, dlssNr || hud ? SW_HIDE : SW_SHOW);
+  for (int id = ID_PRESET; id < ID_COLOR + 3; ++id)
+    if (HWND control = GetDlgItem(h, id))
+      ShowWindow(control, hud ? SW_SHOW : SW_HIDE);
   for (int id = 510; id <= 523; ++id)
     if (HWND control = GetDlgItem(h, id))
       ShowWindow(control, dlssNr ? SW_SHOW : SW_HIDE);
@@ -566,12 +466,31 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_DRAWITEM) {
     DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)l;
     if (!dis) return TRUE;
+    const int id = (int)dis->CtlID;
+    if (id >= ID_PRESET && id < ID_PRESET + 4) {
+      drawPushButton(dis, hudPresetName(id - ID_PRESET + 1), g_cfg.preset == id - ID_PRESET + 1); return TRUE;
+    }
+    if (id >= ID_ITEM && id < ID_ITEM + kHudItemCount) {
+      drawOwnerButton(dis, kHudItems[id - ID_ITEM].name, g_cfg.*kHudItems[id - ID_ITEM].field); return TRUE;
+    }
+    if (id == ID_LAYOUT) { drawPushButton(dis, g_cfg.layout ? L"Layout: Horizontal" : L"Layout: Vertical", false); return TRUE; }
+    if (id == ID_POSITION) {
+      wchar_t b[48]; swprintf_s(b, L"Position: %s", kPositionNames[std::clamp(g_cfg.position, 0, 5)]);
+      drawPushButton(dis, b, false); return TRUE;
+    }
+    if (id == ID_BG) { drawOwnerButton(dis, L"Background", g_cfg.background); return TRUE; }
+    if (id == ID_OUTLINE) { drawOwnerButton(dis, L"Text shadow", g_cfg.text_outline); return TRUE; }
+    if (id >= ID_COLOR && id < ID_COLOR + 3) {
+      static const wchar_t* names[3] = {L"Accent", L"Text", L"Graph"};
+      const COLORREF col = id == ID_COLOR ? g_cfg.accent_color : id == ID_COLOR + 1 ? g_cfg.text_color : g_cfg.graph_color;
+      HDC dc = dis->hDC; RECT r = dis->rcItem;
+      HBRUSH bg = CreateSolidBrush(C_WIN); FillRect(dc, &r, bg); DeleteObject(bg);
+      RECT sw{r.left, r.top + 2, r.left + 36, r.bottom - 2};
+      HBRUSH sb = CreateSolidBrush(col); roundRect(dc, sw, 6, sb); DeleteObject(sb);
+      drawText(dc, names[id - ID_COLOR], sw.right + 8, r.top + 3, 13, C_TEXT, false);
+      return TRUE;
+    }
     switch (dis->CtlID) {
-      case 101: drawOwnerButton(dis, L"FPS", g_cfg.fps); return TRUE;
-      case 102: drawOwnerButton(dis, L"Frametime", g_cfg.frametime); return TRUE;
-      case 103: drawOwnerButton(dis, L"Graph", g_cfg.frame_timing); return TRUE;
-      case 104: drawOwnerButton(dis, L"Resolution", g_cfg.resolution); return TRUE;
-      case 105: drawOwnerButton(dis, L"Background", g_cfg.background); return TRUE;
       case 106: drawOwnerButton(dis, L"Enabled", g_frameLimit.enabled); return TRUE;
       case 510: drawOwnerButton(dis, g_dlssNr.style == 0 ? L"Style: Neutral" : g_dlssNr.style == 1 ? L"Style: Natural" : L"Style: Cinematic", true); return TRUE;
       case 516: drawOwnerButton(dis, L"Automatic skin mask", g_dlssNr.automaticSkinMask); return TRUE;
@@ -580,7 +499,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case 520: {
         HDC dc = dis->hDC; RECT r = dis->rcItem;
         HBRUSH bg = CreateSolidBrush(C_RED); FillRect(dc, &r, bg); DeleteObject(bg);
-        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, C_DARK);
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255,255,255));
         HFONT font = makeFont(12, true); HFONT prior = (HFONT)SelectObject(dc, font);
         DrawTextW(dc, L"Save settings", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, prior); DeleteObject(font);
@@ -589,7 +508,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case 205: {
         HDC dc = dis->hDC; RECT r = dis->rcItem;
         HBRUSH bg = CreateSolidBrush(C_RED); FillRect(dc, &r, bg); DeleteObject(bg);
-        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, C_DARK);
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255,255,255));
         HFONT font = makeFont(12, true); HFONT prior = (HFONT)SelectObject(dc, font);
         DrawTextW(dc, L"Save settings", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, prior); DeleteObject(font);
@@ -626,22 +545,25 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     EndPaint(h, &ps); return 0;
   }
   if (m == WM_NCHITTEST) {
-    // FPS is a visual-only HUD: never let it consume mouse hit-tests.
-    if (h == g_fps) return HTTRANSPARENT;
     POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     ScreenToClient(h, &p);
-    if (p.y < 48 && !((p.x >= 244 && p.x < 336) || (p.x >= 344 && p.x < 456))) return HTCAPTION;
+    if (p.y < 48 && !(p.x >= 200 && p.x < 456)) return HTCAPTION;
     return HTCLIENT;
   }
   if (m == WM_LBUTTONUP) {
     POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-    if (p.y < 48 && p.x >= 244 && p.x < 336) {
-      g_dlssNrTab = false;
+    if (p.y < 48 && p.x >= 200 && p.x < 280) {
+      g_dlssNrTab = false; g_hudTab = false;
       setSettingsTab(h, false);
       InvalidateRect(h, nullptr, TRUE); UpdateWindow(h); return 0;
     }
-    if (p.y < 48 && p.x >= 344 && p.x < 456) {
-      g_dlssNrTab = true;
+    if (p.y < 48 && p.x >= 286 && p.x < 350) {
+      g_dlssNrTab = false; g_hudTab = true;
+      setSettingsTab(h, false, true);
+      InvalidateRect(h, nullptr, TRUE); UpdateWindow(h); return 0;
+    }
+    if (p.y < 48 && p.x >= 356 && p.x < 456) {
+      g_dlssNrTab = true; g_hudTab = false;
       setSettingsTab(h, true);
       InvalidateRect(h, nullptr, TRUE); UpdateWindow(h); return 0;
     }
@@ -662,20 +584,34 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       else { g_dlssNr.newModel = !g_dlssNr.newModel; g_toggleDlssNr = true; }
       saveCfg(); InvalidateRect(h, nullptr, FALSE); return 0;
     }
-    if (LOWORD(w) >= 101 && LOWORD(w) <= 106) {
-      // These are BS_OWNERDRAW controls, so Windows does not maintain a
-      // checkbox state for us. Toggle our actual config state directly.
-      if (LOWORD(w) == 101) g_cfg.fps = !g_cfg.fps;
-      if (LOWORD(w) == 102) g_cfg.frametime = !g_cfg.frametime;
-      if (LOWORD(w) == 103) g_cfg.frame_timing = !g_cfg.frame_timing;
-      if (LOWORD(w) == 104) g_cfg.resolution = !g_cfg.resolution;
-      if (LOWORD(w) == 105) g_cfg.background = !g_cfg.background;
-      if (LOWORD(w) == 106) g_frameLimit.enabled = !g_frameLimit.enabled;
+    if (LOWORD(w) == 106) {
+      // BS_OWNERDRAW: Windows keeps no checkbox state, toggle ours directly.
+      g_frameLimit.enabled = !g_frameLimit.enabled;
       InvalidateRect(h, nullptr, FALSE);
-      if (g_fpsVisible) { updateFpsPos(); renderFpsLayered(); }
       saveCfg();
-      if (g_fpsVisible) updateFpsPos();
-      if (LOWORD(w) == 106) { InvalidateRect(g_ui, nullptr, FALSE); UpdateWindow(g_ui); }
+      InvalidateRect(g_ui, nullptr, FALSE); UpdateWindow(g_ui);
+    }
+    const int cid = LOWORD(w);
+    if (HIWORD(w) == BN_CLICKED && cid >= ID_PRESET && cid < ID_COLOR + 3) {
+      if (cid < ID_PRESET + 4) applyHudPreset(g_cfg, cid - ID_PRESET + 1);
+      else if (cid >= ID_ITEM && cid < ID_ITEM + kHudItemCount) {
+        bool& item = g_cfg.*kHudItems[cid - ID_ITEM].field;
+        item = !item; g_cfg.preset = HudPresetCustom;
+      }
+      else if (cid == ID_LAYOUT) { g_cfg.layout = !g_cfg.layout; g_cfg.preset = HudPresetCustom; }
+      else if (cid == ID_POSITION) g_cfg.position = (g_cfg.position + 1) % 6;
+      else if (cid == ID_BG) g_cfg.background = !g_cfg.background;
+      else if (cid == ID_OUTLINE) g_cfg.text_outline = !g_cfg.text_outline;
+      else if (cid >= ID_COLOR) {
+        static COLORREF cust[16] = {};
+        COLORREF* target = cid == ID_COLOR ? &g_cfg.accent_color : cid == ID_COLOR + 1 ? &g_cfg.text_color : &g_cfg.graph_color;
+        CHOOSECOLORW cc{}; cc.lStructSize = sizeof(cc);
+        cc.hwndOwner = h; cc.lpCustColors = cust; cc.rgbResult = *target;
+        cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+        if (ChooseColorW(&cc)) *target = cc.rgbResult;
+      }
+      saveCfg(); pushHud(); syncHudControls();
+      return 0;
     }
     if (HIWORD(w) == EN_CHANGE && LOWORD(w) == 206) {
       wchar_t fpsText[16]{}; GetWindowTextW(GetDlgItem(h, 206), fpsText, 16);
@@ -686,17 +622,6 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (HIWORD(w) == CBN_SELCHANGE && LOWORD(w) == 207) {
       g_frameLimit.method = frame_limit::normalizeMethod((int)SendMessageW(GetDlgItem(h, 207), CB_GETCURSEL, 0, 0));
       saveCfg();
-    }
-    if (LOWORD(w) >= 401 && LOWORD(w) <= 403) {
-      static COLORREF cust[16] = {};
-      CHOOSECOLORW cc{}; cc.lStructSize = sizeof(cc);
-      cc.hwndOwner = h; cc.lpCustColors = cust;
-      cc.Flags = CC_FULLOPEN | CC_RGBINIT;
-      COLORREF* target = nullptr;
-      if (LOWORD(w) == 401) { cc.rgbResult = g_cfg.engine_color; target = &g_cfg.engine_color; }
-      if (LOWORD(w) == 402) { cc.rgbResult = g_cfg.text_color; target = &g_cfg.text_color; }
-      if (LOWORD(w) == 403) { cc.rgbResult = g_cfg.frametime_color; target = &g_cfg.frametime_color; }
-      if (target && ChooseColorW(&cc)) { *target = cc.rgbResult; saveCfg(); }
     }
     if (HIWORD(w) == EN_CHANGE && LOWORD(w) == 203) {
       wchar_t p[MAX_PATH*4]{}; GetWindowTextW(g_pathEdit, p, MAX_PATH*4);
@@ -759,15 +684,12 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       wchar_t sharpText[16]{}; swprintf_s(sharpText, L"%.2f", g_sharpness);
       SetWindowTextW(GetDlgItem(h, 303), sharpText);
       saveCfg(); InvalidateRect(h, nullptr, FALSE);
-    } else if (ctrl == GetDlgItem(h, 201)) {
-      g_cfg.fontSize = (int)SendMessageW(ctrl, TBM_GETPOS, 0, 0);
-      wchar_t b[8]; swprintf_s(b, L"%d", g_cfg.fontSize);
-      SetWindowTextW(GetDlgItem(h, 301), b); saveCfg(); updateFpsPos();
-    } else if (ctrl == GetDlgItem(h, 202)) {
-      int val = (int)SendMessageW(ctrl, TBM_GETPOS, 0, 0);
-      g_cfg.background_alpha = (float)val / 100.0f;
-      wchar_t b[8]; swprintf_s(b, L"%d%%", val);
-      SetWindowTextW(GetDlgItem(h, 302), b); saveCfg(); renderFpsLayered();
+    } else if (const int sid = GetDlgCtrlID(ctrl); sid >= ID_SLIDER && sid < ID_SLIDER + 5) {
+      setHudSliderValue(sid - ID_SLIDER, (int)SendMessageW(ctrl, TBM_GETPOS, 0, 0));
+      wchar_t b[16]; hudSliderText(sid - ID_SLIDER, b, 16);
+      SetWindowTextW(GetDlgItem(h, ID_SLIDER_VALUE + sid - ID_SLIDER), b);
+      hudSetConfig(g_cfg);
+      if (LOWORD(w) != TB_THUMBTRACK) saveCfg();
     }
   }
   return DefWindowProcW(h, m, w, l);
@@ -780,16 +702,11 @@ bool overlayInit(HINSTANCE inst, HWND output) {
 
   WNDCLASSEXW c{sizeof(c)}; c.hInstance = inst; c.hCursor = LoadCursor(nullptr, IDC_ARROW); c.hbrBackground = nullptr;
   c.lpfnWndProc = uiProc;      c.lpszClassName = UI_CLS;  RegisterClassExW(&c);
-  c.lpfnWndProc = fpsProc;     c.lpszClassName = FPS_CLS; RegisterClassExW(&c);
   c.lpfnWndProc = settingsProc; c.lpszClassName = SET_CLS; RegisterClassExW(&c);
 
   int barW = BAR_PAD*2 + 7*BTN_SIZE + 6*BTN_GAP;
   g_ui = CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST, UI_CLS, L"",
     WS_POPUP, 0, 0, barW, BAR_PAD*2+BTN_SIZE, nullptr, nullptr, inst, nullptr);
-
-  // FPS window — layered for per-pixel alpha via UpdateLayeredWindow
-  g_fps = CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST,
-    FPS_CLS, L"", WS_POPUP, 0, 0, 200, 100, nullptr, nullptr, inst, nullptr);
 
   // Settings panel
   { int sw=GetSystemMetrics(SM_CXSCREEN), sh=GetSystemMetrics(SM_CYSCREEN);
@@ -797,7 +714,6 @@ bool overlayInit(HINSTANCE inst, HWND output) {
       WS_POPUP, (sw-480)/2, (sh-740)/2, 480, 740, nullptr, nullptr, inst, nullptr); }
 
   if (g_settings) {
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 24, 84, 80, 22, g_settings, (HMENU)101, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 244, 82, 212, 24, g_settings, (HMENU)510, inst, nullptr);
     auto makeNrSlider = [&](int id, int y, int minimum, int maximum, int value) {
       HWND slider = CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|TBS_NOTICKS|TBS_AUTOTICKS, 140, y, 310, 28, g_settings, (HMENU)(INT_PTR)id, inst, nullptr);
@@ -817,64 +733,63 @@ bool overlayInit(HINSTANCE inst, HWND output) {
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 568, 200, 22, g_settings, (HMENU)516, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 598, 300, 22, g_settings, (HMENU)517, inst, nullptr);
      CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 628, 230, 22, g_settings, (HMENU)523, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 110, 84, 100, 22, g_settings, (HMENU)102, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 216, 84, 80, 22, g_settings, (HMENU)103, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 302, 84, 100, 22, g_settings, (HMENU)104, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 24, 112, 100, 22, g_settings, (HMENU)105, inst, nullptr);
-    CreateWindowW(L"STATIC", L"Font size:", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 178, 70, 18, g_settings, (HMENU)601, inst, nullptr);
-    CreateWindowW(L"STATIC", L"24", WS_CHILD|WS_VISIBLE|SS_LEFT|SS_CENTER, 410, 178, 30, 18, g_settings, (HMENU)301, inst, nullptr);
-    CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|WS_VISIBLE|TBS_NOTICKS|TBS_AUTOTICKS, 100, 174, 300, 26, g_settings, (HMENU)201, inst, nullptr);
-    SendMessageW(GetDlgItem(g_settings, 201), TBM_SETRANGE, TRUE, MAKELONG(12, 48));
-    SendMessageW(GetDlgItem(g_settings, 201), TBM_SETPOS, TRUE, g_cfg.fontSize);
-    CreateWindowW(L"STATIC", L"Bg alpha:", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 214, 70, 18, g_settings, (HMENU)602, inst, nullptr);
-    CreateWindowW(L"STATIC", L"50%", WS_CHILD|WS_VISIBLE|SS_LEFT|SS_CENTER, 410, 214, 30, 18, g_settings, (HMENU)302, inst, nullptr);
-    CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|WS_VISIBLE|TBS_NOTICKS|TBS_AUTOTICKS, 100, 210, 300, 26, g_settings, (HMENU)202, inst, nullptr);
-    SendMessageW(GetDlgItem(g_settings, 202), TBM_SETRANGE, TRUE, MAKELONG(0, 100));
-    SendMessageW(GetDlgItem(g_settings, 202), TBM_SETPOS, TRUE, (int)(g_cfg.background_alpha*100));
-    CreateWindowW(L"STATIC", L"Engine:", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 250, 50, 18, g_settings, (HMENU)603, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 80, 246, 40, 22, g_settings, (HMENU)401, inst, nullptr);
-    CreateWindowW(L"STATIC", L"Text:", WS_CHILD|WS_VISIBLE|SS_LEFT, 130, 250, 40, 18, g_settings, (HMENU)604, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 174, 246, 40, 22, g_settings, (HMENU)402, inst, nullptr);
-    CreateWindowW(L"STATIC", L"Graph:", WS_CHILD|WS_VISIBLE|SS_LEFT, 224, 250, 40, 18, g_settings, (HMENU)605, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 268, 246, 40, 22, g_settings, (HMENU)403, inst, nullptr);
+    // HUD tab
+    for (int i = 0; i < 4; ++i) { RECT r = presetRect(i);
+      CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, r.left, r.top, r.right-r.left, r.bottom-r.top, g_settings, (HMENU)(INT_PTR)(ID_PRESET+i), inst, nullptr); }
+    for (int i = 0; i < kHudItemCount; ++i) { RECT r = itemRect(i);
+      CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, r.left, r.top, r.right-r.left, r.bottom-r.top, g_settings, (HMENU)(INT_PTR)(ID_ITEM+i), inst, nullptr); }
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 338, 200, 28, g_settings, (HMENU)(INT_PTR)ID_LAYOUT, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 232, 338, 222, 28, g_settings, (HMENU)(INT_PTR)ID_POSITION, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24, 380, 140, 22, g_settings, (HMENU)(INT_PTR)ID_BG, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 168, 380, 140, 22, g_settings, (HMENU)(INT_PTR)ID_OUTLINE, inst, nullptr);
+    for (int i = 0; i < 5; ++i) {
+      const int y = kHudSliderY + i * kHudSliderStep;
+      static HFONT labelFont = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      HWND label = CreateWindowW(L"STATIC", kHudSliders[i].label, WS_CHILD|SS_LEFT, 24, y + 4, 110, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_LABEL+i), inst, nullptr);
+      SendMessageW(label, WM_SETFONT, (WPARAM)labelFont, FALSE);
+      HWND sl = CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|TBS_NOTICKS, 134, y, 266, 26, g_settings, (HMENU)(INT_PTR)(ID_SLIDER+i), inst, nullptr);
+      SendMessageW(sl, TBM_SETRANGE, TRUE, MAKELONG(kHudSliders[i].lo, kHudSliders[i].hi));
+      HWND value = CreateWindowW(L"STATIC", L"", WS_CHILD|SS_RIGHT, 402, y + 4, 52, 18, g_settings, (HMENU)(INT_PTR)(ID_SLIDER_VALUE+i), inst, nullptr);
+      SendMessageW(value, WM_SETFONT, (WPARAM)labelFont, FALSE);
+    }
+    for (int i = 0; i < 3; ++i)
+      CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 24 + i*144, 626, 130, 26, g_settings, (HMENU)(INT_PTR)(ID_COLOR+i), inst, nullptr);
     // FSR sharpening slider belongs to overlay settings.
-    CreateWindowW(L"STATIC", L"Sharpening amount", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 306, 130, 18, g_settings, (HMENU)606, inst, nullptr);
+    CreateWindowW(L"STATIC", L"Sharpening amount", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 86, 130, 18, g_settings, (HMENU)606, inst, nullptr);
     wchar_t sharpText[16]{}; swprintf_s(sharpText, L"%.2f", g_sharpness);
-    CreateWindowW(L"STATIC", sharpText, WS_CHILD|WS_VISIBLE|SS_LEFT, 410, 306, 40, 18, g_settings, (HMENU)303, inst, nullptr);
-    CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|WS_VISIBLE|TBS_NOTICKS|TBS_AUTOTICKS, 24, 326, 430, 26, g_settings, (HMENU)208, inst, nullptr);
+    CreateWindowW(L"STATIC", sharpText, WS_CHILD|WS_VISIBLE|SS_LEFT, 410, 86, 40, 18, g_settings, (HMENU)303, inst, nullptr);
+    CreateWindowExW(0, L"msctls_trackbar32", L"", WS_CHILD|WS_VISIBLE|TBS_NOTICKS|TBS_AUTOTICKS, 24, 106, 430, 26, g_settings, (HMENU)208, inst, nullptr);
     SendMessageW(GetDlgItem(g_settings, 208), TBM_SETRANGE, TRUE, MAKELONG(0, 100));
     SendMessageW(GetDlgItem(g_settings, 208), TBM_SETPOS, TRUE, (int)std::lround(g_sharpness * 100.0f));
     // Frame limiter controls
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 24, 376, 100, 22, g_settings, (HMENU)106, inst, nullptr);
-     CreateWindowW(L"STATIC", L"Cap FPS", WS_CHILD|WS_VISIBLE|SS_LEFT, 142, 378, 52, 18, g_settings, (HMENU)607, inst, nullptr);
-     CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_NUMBER|ES_AUTOHSCROLL, 196, 374, 58, 24, g_settings, (HMENU)206, inst, nullptr);
-     HWND methodBox = CreateWindowW(L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 266, 374, 188, 120, g_settings, (HMENU)207, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 24, 158, 100, 22, g_settings, (HMENU)106, inst, nullptr);
+     CreateWindowW(L"STATIC", L"Cap FPS", WS_CHILD|WS_VISIBLE|SS_LEFT, 142, 160, 52, 18, g_settings, (HMENU)607, inst, nullptr);
+     CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_NUMBER|ES_AUTOHSCROLL, 196, 156, 58, 24, g_settings, (HMENU)206, inst, nullptr);
+     HWND methodBox = CreateWindowW(L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST|WS_VSCROLL, 266, 156, 188, 120, g_settings, (HMENU)207, inst, nullptr);
      SendMessageW(methodBox, CB_ADDSTRING, 0, (LPARAM)L"Early - smoother");
      SendMessageW(methodBox, CB_ADDSTRING, 0, (LPARAM)L"Late - snappier");
      SendMessageW(methodBox, CB_SETCURSEL, g_frameLimit.method, 0);
      wchar_t fpsText[16]{}; swprintf_s(fpsText, L"%d", g_frameLimit.fps); SetWindowTextW(GetDlgItem(g_settings, 206), fpsText);
-     CreateWindowW(L"STATIC", L"Folder:", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 440, 60, 18, g_settings, (HMENU)608, inst, nullptr);
+     CreateWindowW(L"STATIC", L"Folder:", WS_CHILD|WS_VISIBLE|SS_LEFT, 24, 230, 60, 18, g_settings, (HMENU)608, inst, nullptr);
     g_pathEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", g_shotPath.c_str(),
-      WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 24, 462, 340, 24, g_settings, (HMENU)203, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"Browse...", WS_CHILD|WS_VISIBLE, 374, 462, 80, 24, g_settings, (HMENU)204, inst, nullptr);
-    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 342, 518, 112, 30, g_settings, (HMENU)205, inst, nullptr);
+      WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 24, 252, 340, 24, g_settings, (HMENU)203, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"Browse...", WS_CHILD|WS_VISIBLE, 374, 252, 80, 24, g_settings, (HMENU)204, inst, nullptr);
+    CreateWindowW(L"BUTTON", L"", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 342, 296, 112, 30, g_settings, (HMENU)205, inst, nullptr);
     CreateWindowW(L"BUTTON", L"", WS_CHILD|BS_OWNERDRAW, 342, 632, 112, 30, g_settings, (HMENU)520, inst, nullptr);
-    CheckDlgButton(g_settings, 101, g_cfg.fps ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(g_settings, 102, g_cfg.frametime ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(g_settings, 103, g_cfg.frame_timing ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(g_settings, 104, g_cfg.resolution ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(g_settings, 105, g_cfg.background ? BST_CHECKED : BST_UNCHECKED);
+    syncHudControls();
     SetWindowTextW(g_pathEdit, g_shotPath.c_str());
     setSettingsTab(g_settings, false);
     ShowWindow(g_settings, SW_HIDE);
   }
 
-  if (g_fps) {
-    // Do NOT call SetLayeredWindowAttributes here. UpdateLayeredWindow owns
-    // the per-pixel alpha for this window; mixing the two APIs breaks the
-    // layered surface and results in an opaque/black HUD.
-    if (g_fpsVisible) ShowWindow(g_fps, SW_SHOWNOACTIVATE);
-  }
+  // Rounded corners on Windows 11 (ignored elsewhere).
+  const DWORD round = 2; // DWMWCP_ROUND
+  if (g_ui) DwmSetWindowAttribute(g_ui, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &round, sizeof(round));
+  if (g_settings) DwmSetWindowAttribute(g_settings, 33, &round, sizeof(round));
+
+  hudStart(inst, output);
+  pushHud();
 
   g_initialized = true;
   return true;
@@ -882,25 +797,15 @@ bool overlayInit(HINSTANCE inst, HWND output) {
 
 void overlayShutdown() {
   saveCfg();
-  if (g_fps) DestroyWindow(g_fps);
+  hudStop();
   if (g_ui) DestroyWindow(g_ui);
   if (g_settings) DestroyWindow(g_settings);
-  g_fps = g_ui = g_settings = nullptr; g_initialized = false;
+  g_ui = g_settings = nullptr; g_initialized = false;
 }
 
 void overlaySetPresentationVisible(bool visible) {
-  if (!g_fps || !IsWindow(g_fps)) return;
-  if (!visible) {
-    ShowWindow(g_fps, SW_HIDE);
-    return;
-  }
-  // Recompute from the current output rectangle and restore topmost ordering;
-  // never leave the HUD visible at the old desktop position during Alt-Tab.
-  updateFpsPos();
-  if (g_fpsVisible) {
-    SetWindowPos(g_fps, HWND_TOPMOST, 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-  }
+  // The HUD thread re-anchors to the output rectangle and restores topmost.
+  hudSetPresentationVisible(visible);
 }
 
 void overlaySetOpen(bool open) {
@@ -917,42 +822,63 @@ void overlaySetOpen(bool open) {
     } else ShowWindow(g_ui, SW_HIDE);
   }
   if (!open && g_settings) ShowWindow(g_settings, SW_HIDE);
-  // Re-assert FPS window topmost when overlay toggles — applyOverlayActivation
-  // can push NRLive above the FPS window.  This runs once on toggle (not
-  // every frame) so no z-order fighting / stutter.
-  if (g_fps && g_fpsVisible) {
-    SetWindowPos(g_fps, HWND_TOPMOST, 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-  }
-  updateFpsPos();
+  // Re-assert HUD topmost when overlay toggles — applyOverlayActivation
+  // can push NRLive above it. Once per toggle, not every frame.
+  hudReassertTopmost();
 }
 
-void overlayUpdate(float fps, float ms, Size cap, Size out) {
-  g_lastFps = fps; g_lastMs = ms; g_cap = cap; g_out = out;
+static bool comboDown(UINT mods, UINT vk) {
+  auto down = [](int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; };
+  if (!vk || !down((int)vk)) return false;
+  if (((mods & MOD_CONTROL) != 0) != down(VK_CONTROL)) return false;
+  if (((mods & MOD_SHIFT) != 0) != down(VK_SHIFT)) return false;
+  if (((mods & MOD_ALT) != 0) != down(VK_MENU)) return false;
+  if ((mods & MOD_WIN) && !down(VK_LWIN) && !down(VK_RWIN)) return false;
+  return true;
+}
 
-  // MangoHud-style 500 ms sampling. This is deliberately independent from
-  // the raw instantaneous FPS so a single frame spike cannot make the HUD
-  // jump wildly between values.
-  if (ms >= 1.0f && ms <= 1000.0f) {
-    g_frameSamples.push_back(ms);
-    g_sampleSumMs += ms;
-    while (g_frameSamples.size() > 1 && g_sampleSumMs - g_frameSamples.front() > 500.0f) {
-      g_sampleSumMs -= g_frameSamples.front();
-      g_frameSamples.pop_front();
+void overlayUpdate(const OverlayFrameStats& st) {
+  HudFrame f;
+  f.sourceMs = st.sourceMs; f.capture = st.capture; f.output = st.output;
+  f.fsr = st.fsr; f.nr = st.nr; f.nrBuilding = st.nrBuilding; f.fg = g_fgActive; f.latencyMs = st.latencyMs;
+  f.gpuMotionMs = st.gpuMotionMs; f.gpuNrMs = st.gpuNrMs; f.gpuFsrMs = st.gpuFsrMs; f.gpuTotalMs = st.gpuTotalMs;
+  hudPushFrame(f);
+
+  // HUD hotkeys (MangoHud defaults: Shift+F12 toggle, Shift+F10 next preset).
+  const bool toggle = comboDown(g_toggleMods, g_toggleVk);
+  if (toggle && !g_toggleDown) {
+    g_fpsVisible = !g_fpsVisible;
+    saveCfg(); hudSetEnabled(g_fpsVisible);
+    if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
+  }
+  g_toggleDown = toggle;
+  const bool preset = comboDown(g_presetMods, g_presetVk);
+  if (preset && !g_presetDown) {
+    applyHudPreset(g_cfg, nextHudPreset(g_cfg.preset));
+    if (!g_fpsVisible) g_fpsVisible = true;
+    saveCfg(); pushHud(); syncHudControls();
+  }
+  g_presetDown = preset;
+
+  // Pick up edits made by the launcher while NRLive runs (once a second).
+  const ULONGLONG now = GetTickCount64();
+  if (now >= g_iniCheckAt) {
+    g_iniCheckAt = now + 1000;
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    if (GetFileAttributesExW(iniPath().c_str(), GetFileExInfoStandard, &fa) &&
+        CompareFileTime(&fa.ftLastWriteTime, &g_iniTime) != 0) {
+      g_iniTime = fa.ftLastWriteTime;
+      loadHudConfig(iniPath(), g_cfg);
+      g_fpsVisible = GetPrivateProfileIntW(L"FPS", L"enabled", 1, iniPath().c_str()) != 0;
+      pushHud(); syncHudControls();
+      if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
     }
-    g_smoothMs = g_sampleSumMs / (float)std::max<size_t>(1, g_frameSamples.size());
-    g_smoothFps = g_smoothMs > 0.001f ? 1000.0f / g_smoothMs : 0.0f;
-  }
-
-  if (g_fpsVisible) {
-    g_ftBuf[g_ftIdx] = ms;
-    g_ftIdx = (g_ftIdx + 1) % FT_SAMPLES;
-    g_ftMin = 9999; g_ftMax = 0;
-    for (int i = 0; i < FT_SAMPLES; ++i)
-      if (g_ftBuf[i] > 0) { g_ftMin = std::min(g_ftMin, g_ftBuf[i]); g_ftMax = std::max(g_ftMax, g_ftBuf[i]); }
-    updateFpsPos();
   }
 }
+
+void overlaySetAdapter(LUID luid) { hudSetAdapter(luid); }
+void overlaySetCaptureExcluded(bool exclude) { hudSetCaptureExcluded(exclude); }
+bool overlayWantsGpuTimes() { return g_fpsVisible && g_cfg.gpu_times; }
 
 void overlaySetFsrEnabled(bool e) { g_fsr = e; if (g_ui) InvalidateRect(g_ui, nullptr, FALSE); }
 bool overlayConsumeFsrToggle() { bool v = g_toggleFsr; g_toggleFsr = false; return v; }
@@ -974,9 +900,7 @@ void overlaySetFgEnabled(bool enabled) {
   if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
 }
 void overlaySetFgActive(bool active) {
-  if (g_fgActive == active) return;
   g_fgActive = active;
-  if (g_fpsVisible) renderFpsLayered();
 }
 const OverlayHudConfig& overlayConfig() { return g_cfg; }
 std::wstring overlayScreenshotPath() { return g_shotPath; }

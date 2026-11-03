@@ -79,6 +79,9 @@ public:
   void shutdown();
   // One line for the HUD/log: building, running (size, GPU time, network) or why not.
   std::wstring status();
+  // From the last status() call: the network is still being built, and its median GPU ms (<0 none).
+  bool building() const { return m_building; }
+  float gpuMs() const { return m_gpuMs; }
 
 private:
   bool ensureSession(ID3D12Device* device, ID3D12CommandQueue* queue, const OpenNrSettings& s);
@@ -100,4 +103,5 @@ private:
   std::wstring m_error;
   std::wstring m_status;
   uint64_t m_infoTick = 0;
+  float m_gpuMs = -1;
 };

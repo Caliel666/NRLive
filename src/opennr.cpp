@@ -405,6 +405,7 @@ std::wstring OpenNrRuntime::status()
       info.last_error[sizeof info.last_error - 1] = 0;
       wchar_t line[256]{};
       m_building = info.building != 0;
+      m_gpuMs = !info.failed && !info.building && info.frame_w ? info.gpu_ms_median : -1;
       if (info.failed) {
         m_sessionFailed = true;
         m_status = L"OpenNR failed: " + widen(info.last_error);

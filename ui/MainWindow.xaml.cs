@@ -380,6 +380,14 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true) ExePathBox.Text = dialog.FileName;
     }
 
+    private void HudSettings_Click(object sender, RoutedEventArgs e)
+    {
+        // NRLive keeps scaleconfig.ini next to its executable.
+        string exe = ExePathBox.Text.Trim();
+        string dir = Path.GetDirectoryName(string.IsNullOrWhiteSpace(exe) ? Path.Combine(Root, "NRLive.exe") : Path.GetFullPath(exe)) ?? Root;
+        new HudSettingsWindow(Path.Combine(dir, "scaleconfig.ini")) { Owner = this }.ShowDialog();
+    }
+
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         e.Handled = true;
