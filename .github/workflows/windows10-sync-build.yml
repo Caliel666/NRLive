@@ -101,20 +101,28 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dlssnr-source" "$RUNNER_TEMP/dlssnr-release" build/dlssnr-runtime
           curl -L --fail --retry 5 --retry-delay 3 https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.5-win-preview.zip -o "$RUNNER_TEMP/dlssnr-source.zip"
-          release_api_url="https://gitlab.com/api/v4/projects/mochizuki0323%2FDLSSNR-AMD/releases/v0.0.8.2"
+          release_api_url="https://gitlab.com/api/v4/projects/mochizuki0323%2FDLSSNR-AMD/releases?per_page=100"
           curl -L --fail --retry 5 --retry-delay 3 "$release_api_url" -o "$RUNNER_TEMP/dlssnr-release.json"
           runtime_url="$(python3 - "$RUNNER_TEMP/dlssnr-release.json" <<'PY'
           import json, sys
           expected = "DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip"
           with open(sys.argv[1], encoding="utf-8") as f:
-              release = json.load(f)
+              releases = json.load(f)
+          release = next(
+              (item for item in releases if item.get("tag_name") in {"v0.0.8.2", "0.0.8.2"}),
+              None,
+          )
+          if release is None:
+              print("GitLab project API did not list release tag v0.0.8.2 / 0.0.8.2.", file=sys.stderr)
+              print("Available tags: " + ", ".join(item.get("tag_name", "<unnamed>") for item in releases), file=sys.stderr)
+              sys.exit(1)
           links = release.get("assets", {}).get("links", [])
           matches = [
               link for link in links
               if expected in (link.get("name", "") + " " + link.get("url", "") + " " + link.get("direct_asset_url", ""))
           ]
           if not matches:
-              print("Could not find the expected Windows 0.0.8.2 asset in the GitLab release.", file=sys.stderr)
+              print("Release v0.0.8.2 exists, but the expected Windows package is not attached.", file=sys.stderr)
               for link in links:
                   print(f"Available release asset: {link.get('name')} -> {link.get('url')}", file=sys.stderr)
               sys.exit(1)
