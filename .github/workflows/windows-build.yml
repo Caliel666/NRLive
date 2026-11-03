@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64 unzip
 
-      - name: Download pinned DLSSNR-AMD Windows source and runtime package
+      - name: Download pinned DLSSNR-AMD source and 0.0.8.2 Windows runtime package
         shell: bash
         run: |
           set -euo pipefail
@@ -39,7 +39,7 @@ jobs:
             https://github.com/mochizuki0323/DLSSNR-AMD/archive/refs/tags/v0.0.6-linux-preview.zip \
             -o "$RUNNER_TEMP/dlssnr-source.zip"
           curl -L --fail --retry 5 --retry-delay 3 \
-            https://github.com/mochizuki0323/DLSSNR-AMD/releases/download/v0.0.5-win-preview/DLSSNR-AMD-Vulkan-Windows-0.0.5-win-preview-x86_64.zip \
+            https://gitlab.com/mochizuki0323/DLSSNR-AMD/-/releases/v0.0.8.2/downloads/DLSSNR-AMD-Vulkan-Windows-0.0.8.2-preview-x86_64.zip \
             -o "$RUNNER_TEMP/dlssnr-runtime.zip"
           unzip -q "$RUNNER_TEMP/dlssnr-source.zip" -d "$RUNNER_TEMP/dlssnr-source"
           unzip -q "$RUNNER_TEMP/dlssnr-runtime.zip" -d "$RUNNER_TEMP/dlssnr-release"
