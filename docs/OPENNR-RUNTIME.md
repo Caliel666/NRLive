@@ -1,7 +1,7 @@
 # OpenNR DLSSNR runtime
 
 NRLive can run DLSSNR through OpenNR's `MochizukiNrRuntime.dll`: mochizuki's DLSSNR-AMD
-Vulkan runtime (v0.0.7) with OpenNR's RenoDX composition stage, ACO machine code, int4
+Vulkan runtime (v0.0.7, OpenNR 0.5.9) with OpenNR's RenoDX composition stage, ACO machine code, int4
 mixed, the Small (310.9.16) and Original (310.8) models and, in newer builds, an RX 7000
 network picked at run time. It runs on NRLive's own D3D12 queue on the captured frame,
 after the motion pass and before the upscaler, the same place OptiScaler runs it before
@@ -31,13 +31,18 @@ installed OpenNR into (`dlssnr-amd\dlssnr-int4.bin`) to `dlssnr-amd\` beside NRL
 ## Getting the runtime
 
 - Release packages of NRLive include it in `opennr\`.
-- `scripts\fetch_opennr_runtime.ps1` downloads the runtime package OpenNR's installer uses
-  (`https://huggingface.co/datasets/zmodelerlover/amd-nr/resolve/main/mochizuki/<version>/mochizuki-<version>.zip`,
-  default `0.5.7-opennr`, SHA-256 checked) into `third_party\opennr-runtime`, dropping any
-  model file. `-From <folder>` takes an OpenNR build instead (for example the
-  `mochizuki-rdna3` branch's export, which adds `shaders-rdna3`).
-- `scripts\build.ps1 ... -OpenNrRuntime third_party\opennr-runtime` stages it as
+- `scriptsetch_opennr_runtime.ps1` downloads the runtime package OpenNR's installer uses
+  from Hugging Face (`https://huggingface.co/datasets/zmodelerlover/amd-nr/resolve/main/mochizuki/<version>/`:
+  `mochizuki-<version>.zip` plus the RX 7000 overlay `mochizuki-rdna3-<version>.zip`), checks
+  both against the SHA-256 pinned in the script, and unpacks them into
+  `third_party\opennr-runtime`, dropping any model file. CI runs the same script.
+  `-From <folder>` takes a local OpenNR build instead.
+- `scriptsuild.ps1 ... -OpenNrRuntime third_party\opennr-runtime` stages it as
   `build\Release\opennr`.
+- To move to a newer runtime: add its version and the two SHA-256 (from OpenNR's
+  installer `payload.json`, or `Get-FileHash` of the downloaded zips) to `$known` in
+  `scriptsetch_opennr_runtime.ps1` and change the `-Version` default. Check that
+  `third_party/opennr` still matches that runtime's ABI headers.
 - OpenNR releases: https://github.com/MatheusFerreiraS/OpenNR-OptiScaler/releases (the
   OptiScaler package carries the same DLL and `dlssnr-amd\`).
 
