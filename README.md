@@ -34,20 +34,19 @@ you can also use it with optiscaler and reshade to be able to apply those to any
 - Motion-vector and frame-generation support
 - Toggleable overlay HUD
 - Keyboard hotkeys for scale/unscale and stop actions
-- Portable launcher packaging for Windows
+- Portable native Windows package (NRLive.exe and its runtime dependencies)
 
 ## Repository layout
 
 - `src/` — main capture, graphics, overlay, target, and FSR logic
 - `include/` — shared headers
-- `ui/` — Windows launcher UI project
 - `scripts/` — dependency fetch and build helpers
 - `tests/` — frame timing / limiter validation tests
-- `.github/workflows/windows-build.yml` — CI build workflow
+- `.github/workflows/windows-build.yml` — native Windows build and test workflow
 
 ## Windows build instructions
 
-These instructions follow the repository’s GitHub Actions workflow.
+These instructions follow the repository's GitHub Actions workflow.
 
 ### 1) Install prerequisites
 
@@ -55,8 +54,8 @@ Install:
 
 - Visual Studio 2022 with Desktop development with C++
 - Windows 10/11 SDK
-- .NET 10 SDK for the launcher project
 - Git and PowerShell
+- CMake 3.24 or newer
 
 ### 2) Clone and fetch dependencies
 
@@ -65,6 +64,7 @@ git clone https://github.com/Caliel666/NRLive.git
 cd NRLive
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_deps.ps1
 ```
+
 ### 3) Build
 
 ```powershell
@@ -83,5 +83,3 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 `
 ```
 
 With Visual Studio 2026, add `-Generator "Visual Studio 18 2026"`.
-  <circle cx="1185" cy="250" r="14" fill="#0a0d12"/>
-</svg>
