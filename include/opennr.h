@@ -49,6 +49,10 @@ public:
   // True when the file changed and the config was read again.
   bool refresh();
   const NrRuntimeConfig& get() const { return m_cfg; }
+  // The overlay edits the live settings in place and saves the [OpenNR] keys it
+  // shows; the next frame's process() call takes them.
+  OpenNrSettings& edit() { return m_cfg.openNr; }
+  void save();
 
 private:
   NrRuntimeConfig m_cfg;

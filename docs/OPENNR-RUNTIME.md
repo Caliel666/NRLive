@@ -53,7 +53,8 @@ or `bridge`. `[DLSSNR] enabled` is the overlay's NR button.
 
 `[OpenNR]` uses OptiScaler's `[DlssNr]` key names, so a working OptiScaler.ini section can be
 copied over. NRLive re-reads the file while it runs (the launcher writes it as you move a
-control); a model, pass or style change rebuilds the network, a look change does not.
+control); a model, pass or style change rebuilds the network, a look change does not. The
+overlay's Settings > NR tab edits the same keys and applies them on the next frame.
 
 | Key | Default | |
 |---|---|---|
@@ -68,7 +69,7 @@ control); a model, pass or style change rebuilds the network, a look change does
 
 ## Status
 
-The last line of the overlay's Settings > DLSSNR tab and NRLive.log show what the runtime is doing: the network build
+The first line of the overlay's Settings > NR tab and NRLive.log show what the runtime is doing: the network build
 (planning, weights, pipelines n/m, and on an RX 7000 the one-time pipeline check), then the
 network size and GPU time, with "RX 7000 (experimental)" when the RDNA3 network runs. The
 runtime's own log is `opennr\mochizuki_nr.log`. If anything is missing or fails, the frame

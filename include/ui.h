@@ -26,7 +26,11 @@ void setBindBypassVks(const UINT* vks, size_t count);
 
 // Steam-style overlay: HUD + mouse not forwarded to game + cursor clipped
 // to the presentation (game view) rectangle.
-void setOverlayOpen(bool open);
+// Every way of closing (hotkey, Esc, a click outside, focus loss) goes through
+// setOverlayOpen(false); returnToGame=false leaves the foreground where it is.
+void setOverlayOpen(bool open, bool returnToGame = true);
 bool isOverlayOpen();
+bool overlayReturnsToGame(); // how the overlay was last closed
+void pollOverlayFocus();     // Esc, or another window taking the foreground, closes the overlay
 void setOverlayHud(HWND hud);
 HWND outputHwnd(); // main presentation window

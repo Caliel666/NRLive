@@ -67,4 +67,8 @@ float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);
 const OverlayHudConfig& overlayConfig();
+// The NR tab edits OpenNR's [OpenNR] settings in place when that runtime runs,
+// the 0.0.6 bridge's [DLSSNR] ones otherwise.
+class NrConfigWatcher;
+void overlaySetNrConfig(NrConfigWatcher* config, bool openNr);
 std::wstring overlayScreenshotPath();
