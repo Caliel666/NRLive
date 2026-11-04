@@ -149,12 +149,11 @@ jobs:
             $tagVersion = $env:GITHUB_REF_NAME -replace '^[vV]', ''
             if ($packageVersion -ne $tagVersion) { throw "version.txt ($packageVersion) does not match release tag ($tagVersion)." }
           }
-          Compress-Archive -Path "$package/*" -DestinationPath "build/NRLive.zip" -Force
           Get-ChildItem $package | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Upload portable Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: NRLive-windows-x64-fsr-sdk-2.3.0
-          path: build/NRLive.zip
+          name: NRLive
+          path: build/package/
           if-no-files-found: error
