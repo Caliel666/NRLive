@@ -1,8 +1,11 @@
-DLSSNR-AMD Windows runtime
-Source: https://github.com/mochizuki0323/DLSSNR-AMD
-License: MIT
-Upstream version intended for this integration: v0.0.4-win-preview
+DLSSNR runtime
+Runtime: OpenNR's MochizukiNrRuntime.dll, downloaded by scripts/fetch_opennr_runtime.ps1 from
+https://huggingface.co/datasets/zmodelerlover/amd-nr (mochizuki/<version>/)
+Built from: mochizuki0323/DLSSNR-AMD (MIT, https://gitlab.com/mochizuki0323/DLSSNR-AMD) and
+OpenNR's runtime code (GPL-3.0, https://github.com/MatheusFerreiraS/OpenNR-OptiScaler)
 
-The complete MIT license is in the upstream repository's LICENSE file. The build workflow copies that exact license into the portable package as DLSSNR-AMD-LICENSE.txt.
+The runtime package carries the upstream MIT license as dlssnr-amd/LICENSE-DLSSNR-AMD.txt. The build
+workflow also copies it into the portable package as DLSSNR-AMD-LICENSE.txt.
 
-Important: the upstream project does not distribute NVIDIA DLSS-NR model weights. Do not bundle nvngx_dlssnr.dll or dlssnr.bin. A user must supply a compatible nvngx_dlssnr.dll and use the upstream model extraction tool to create dlssnr-amd/dlssnr.bin.
+Important: NVIDIA DLSS-NR model weights are not distributed. Do not bundle nvngx_dlssnr.dll or any
+dlssnr*.bin. A user must supply a compatible nvngx_dlssnr.dll and extract the models themselves.
