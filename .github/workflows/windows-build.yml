@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "main"
-      - "feature/dlssnr-0.0.6-nvidia-model-toggle"
     tags:
       - "*"
   pull_request:
@@ -19,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build + tests (FSR SDK 2.3.0)
+    name: Build + tests
     runs-on: windows-2022
 
     steps:
