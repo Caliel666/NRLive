@@ -83,6 +83,9 @@ NrRuntimeConfig readConfig()
   s.antiHaloStrength = readFloat(sec, "MochizukiAntiHaloStrength", s.antiHaloStrength, 0.f, 1.f, ini);
   s.passEstimate = readBool(sec, "MochizukiPassEstimate", s.passEstimate, ini);
   s.noiseEveryFrame = readBool(sec, "MochizukiNoiseEveryFrame", s.noiseEveryFrame, ini);
+  s.historyPrecision = readUint(sec, "MochizukiHistoryPrecision", s.historyPrecision, 16, 32, ini);
+  s.preprocessInverse = readBool(sec, "MochizukiPreprocessInverse", s.preprocessInverse, ini);
+  s.whitePoint = readFloat(sec, "MochizukiWhitePoint", s.whitePoint, 0.f, 16.f, ini);
   s.preprocess = readBool(sec, "MochizukiPreprocess", s.preprocess, ini);
   s.preprocessExposure = readUint(sec, "MochizukiPreprocessExposure", s.preprocessExposure, 0, 2, ini);
   s.preprocessBias = readFloat(sec, "MochizukiPreprocessBias", s.preprocessBias, -8.f, 8.f, ini);
@@ -96,6 +99,12 @@ NrRuntimeConfig readConfig()
 #undef MZR_F
 #undef MZR_U
 #undef MZR_B
+  // Before 0.6.0 skin structure ran from -1, the model's own; that is 1 now, and a saved -1 means it.
+  auto skin = [&](const char* key, float& v) { if (readFloat(sec, key, 0.f, -1.f, 0.f, ini) < 0.f) v = 1.f; };
+  skin("MochizukiRenoSkinStructure", s.MochizukiRenoSkinStructure);
+  skin("MochizukiRenoPass2Skin", s.MochizukiRenoPass2Skin);
+  skin("MochizukiRenoPass3Skin", s.MochizukiRenoPass3Skin);
+  skin("MochizukiRenoPass4Skin", s.MochizukiRenoPass4Skin);
   return c;
 }
 }
@@ -151,6 +160,9 @@ void NrConfigWatcher::save()
   };
   const OpenNrSettings d;
   opt(L"MochizukiNoiseEveryFrame", b(s.noiseEveryFrame), s.noiseEveryFrame == d.noiseEveryFrame);
+  opt(L"MochizukiHistoryPrecision", std::to_wstring(s.historyPrecision), s.historyPrecision == d.historyPrecision);
+  opt(L"MochizukiPreprocessInverse", b(s.preprocessInverse), s.preprocessInverse == d.preprocessInverse);
+  opt(L"MochizukiWhitePoint", f(s.whitePoint), s.whitePoint == d.whitePoint);
   opt(L"MochizukiPreprocess", b(s.preprocess), s.preprocess == d.preprocess);
   opt(L"MochizukiPreprocessExposure", std::to_wstring(s.preprocessExposure), s.preprocessExposure == d.preprocessExposure);
   opt(L"MochizukiPreprocessBias", f(s.preprocessBias), s.preprocessBias == d.preprocessBias);
@@ -175,6 +187,7 @@ struct OpenNrRuntime::Api {
   PFN_MochizukiNrSetControls setControls = nullptr;
   PFN_MochizukiNrGetInfo getInfo = nullptr;
   PFN_MochizukiNrGetControlDefaults getControlDefaults = nullptr;
+  PFN_MochizukiNrSetExposure setExposure = nullptr;
   MochizukiNrControls defaults{};
   MochizukiNrControls sent{};
   bool sentValid = false;
@@ -225,6 +238,7 @@ bool OpenNrRuntime::load()
   api->getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(module, "MochizukiNrGetInfo"));
   api->getControlDefaults =
       reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(module, "MochizukiNrGetControlDefaults"));
+  api->setExposure = reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(module, "MochizukiNrSetExposure"));
   api->defaults.struct_size = sizeof(MochizukiNrControls);
   if (api->getControlDefaults) api->getControlDefaults(&api->defaults);
   api->defaults.struct_size = sizeof(MochizukiNrControls);
@@ -303,6 +317,7 @@ bool OpenNrRuntime::ensureSession(ID3D12Device* device, ID3D12CommandQueue* queu
   m_session = ctx;
   m_sessionAco = (info.flags & LMXXF_NR_CREATE_FLAG_ACO) != 0;
   m_api->sentValid = false;
+  m_sentExposure = -1;
   m_frame = 0;
   m_error.clear();
   return true;
@@ -310,6 +325,11 @@ bool OpenNrRuntime::ensureSession(ID3D12Device* device, ID3D12CommandQueue* queu
 
 void OpenNrRuntime::sendControls(const OpenNrSettings& s)
 {
+  if (const float exposure = openNrExposure(s); m_api->setExposure && exposure != m_sentExposure) {
+    // Never called with the default, so a session without a white point runs as if this did not exist.
+    if (exposure > 0.f || m_sentExposure > 0.f) m_api->setExposure(m_session, exposure);
+    m_sentExposure = exposure;
+  }
   if (!m_api->setControls) return;
   MochizukiNrControls c = m_api->defaults;
   fillOpenNrControls(s, c);

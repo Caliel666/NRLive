@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -185,8 +186,8 @@ static Pending g_pending = Pending::None;
 // What the last interaction changed; saved once the mouse is released.
 static bool g_dirtyCfg = false, g_dirtyNr = false;
 // Which sections are open: General 0-2, HUD 3-6, NR 8-11 (Performance starts closed), 12 Composition,
-// 13 its look details, 14 Encoding and exposure, 15 its encoding, 16 its preprocess.
-static bool g_sec[17] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false};
+// 13 its look details, 14 Encoding and exposure, 15 its encoding, 16 its preprocess, 17 Fast mode options.
+static bool g_sec[18] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false};
 
 static void generalTab(kit::Panel& p) {
   if (p.section(L"FSR", &g_sec[0])) {
@@ -254,16 +255,37 @@ static void hudTab(kit::Panel& p) {
 struct RenoChoice { std::string_view key; int count; const wchar_t* names[4]; };
 static const RenoChoice kRenoChoices[] = {
   {"MochizukiRenoTransferMode", 2, {L"Bounded ratio", L"Consistent"}},
-  {"MochizukiRenoDetailStability", 3, {L"Auto", L"Off", L"Always"}},
   {"MochizukiRenoLookUpsample", 4, {L"Auto", L"Edge-aware", L"Classic", L"Area input"}},
-  {"MochizukiRenoLookStabilize", 3, {L"Off", L"Static", L"Motion"}},
   {"MochizukiRenoSdrBlackRestore", 3, {L"Auto", L"Every block", L"Smooth"}},
-  {"MochizukiRenoDisplayPedestal", 3, {L"Auto", L"Always", L"Smooth"}},
   {"MochizukiRenoCodecMode", 4, {L"Classic", L"Anchored", L"Auto", L"Display"}},
   {"MochizukiRenoSourceEncoding", 4, {L"From the format", L"SDR", L"Linear", L"PQ"}},
   {"MochizukiRenoFeedMode", 3, {L"Auto", L"Content meter", L"Game exposure"}},
-  {"MochizukiRenoNormGovernor", 3, {L"Off", L"Slew", L"Stable"}},
+  {"MochizukiRenoPassesMode", 2, {L"Legacy", L"Fast"}},
+  {"MochizukiRenoFastMethod", 4, {L"Extrapolation", L"Feedback", L"Hybrid", L"Edit strength"}},
 };
+
+// No change to NRLive's picture in any encoding, measured on the real runtime: see docs/OPENNR-RUNTIME.md. The keys are
+// still read, there is just no control for them here.
+static bool renoHidden(std::string_view key) {
+  static constexpr std::string_view hidden[] = {
+    "MochizukiRenoFollowInputRes", // NRLive's vectors are at the capture's size, so following them is the scale above
+    "MochizukiRenoStyleHighlightGuard", "MochizukiRenoDisplayPedestal", "MochizukiRenoNeuralFloorGuard",
+    "MochizukiRenoDetailStability", "MochizukiRenoNormGovernor", "MochizukiRenoNormCutAware",
+    "MochizukiRenoNormAttackStops", "MochizukiRenoNormReleaseStops", "MochizukiRenoNormSlewStops",
+    "MochizukiRenoLookStabilize", "MochizukiRenoLookStabilizeMs", "MochizukiRenoLookStabilizeDetail",
+  };
+  return std::find(std::begin(hidden), std::end(hidden), key) != std::end(hidden);
+}
+
+// The stage's SDR codec reads none of these: they act once a Source encoding moves the capture to the HDR one.
+static bool renoNeedsEncoding(std::string_view key) {
+  static constexpr std::string_view keys[] = {
+    "MochizukiRenoTransferStrength", "MochizukiRenoChromaClamp", "MochizukiRenoTransferMode", "MochizukiRenoCodecMode",
+    "MochizukiRenoLinearUnitNits", "MochizukiRenoProxyAnchor", "MochizukiRenoPaperWhiteScale",
+    "MochizukiRenoDiffuseWhiteNits", "MochizukiRenoPQCalibration", "MochizukiRenoFeedMode",
+  };
+  return std::find(std::begin(keys), std::end(keys), key) != std::end(keys);
+}
 
 static bool renoChoice(kit::Panel& p, std::string_view key, const wchar_t* label, uint32_t* v, const wchar_t* tip) {
   for (const auto& rc : kRenoChoices) {
@@ -278,11 +300,12 @@ static bool renoChoice(kit::Panel& p, std::string_view key, const wchar_t* label
   return false;
 }
 
-static bool renoGroup(kit::Panel& p, OpenNrSettings& s, int wanted, std::string_view skip = {}) {
+static bool renoGroup(kit::Panel& p, OpenNrSettings& s, int wanted, std::function<bool(std::string_view)> only = {}, bool off = false) {
   bool c = false;
-  // NRLive's vectors are at the capture's size, so following them is the scale above.
   const auto shown = [&](std::string_view key, int group) {
-    return group == wanted && key != skip && key != "MochizukiRenoFollowInputRes";
+    if (group != wanted || renoHidden(key) || (only && !only(key))) return false;
+    p.disabled(off || (renoNeedsEncoding(key) && s.MochizukiRenoSourceEncoding == 0));
+    return true;
   };
   const auto fmt = [](std::string_view key) {
     return key.ends_with("Nits") || key.ends_with("Ms") ? L"%.0f" : key.ends_with("SlewStops") ? L"%.3f" : L"%.2f";
@@ -300,6 +323,7 @@ static bool renoGroup(kit::Panel& p, OpenNrSettings& s, int wanted, std::string_
 #undef MZR_F
 #undef MZR_U
 #undef MZR_B
+  p.disabled(false);
   return c;
 }
 
@@ -338,6 +362,9 @@ static bool preprocessTree(kit::Panel& p, OpenNrSettings& s) {
   }
   c |= p.slider(L"Contrast", &s.preprocessContrast, 0.5f, 2.0f, L"%.2f", L"About mid grey.");
   c |= p.slider(L"Saturation", &s.preprocessSaturation, 0.05f, 2.0f, L"%.2f");
+  c |= p.checkbox(L"Inverse", &s.preprocessInverse,
+    L"On, the network's change comes back through the curve's bounded inverse. Off, as its ratio in the picture the "
+    L"network was shown.");
   p.disabled(false);
   if (p.button(L"Reset preprocess")) {
     const OpenNrSettings d;
@@ -360,11 +387,26 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
     static const wchar_t* styles[] = {L"Standard", L"Natural", L"Cinematic"};
     int style = (int)s.MochizukiRenoStyle;
     if (p.choice(L"Style", &style, styles, 3, L"The model's look.")) { s.MochizukiRenoStyle = (uint32_t)style; c = true; }
+    p.disabled(s.MochizukiRenoPassesMode != 0); // the fast mode runs the network once a frame
     static const wchar_t* passes[] = {L"1", L"2", L"3", L"4"};
     int pass = (int)std::min<uint32_t>(s.MochizukiRenoPasses, 4) - 1;
     if (p.choice(L"Passes", &pass, passes, 4,
         L"Model passes, each on the last one's result. Each adds the network's whole cost. A change rebuilds the network.")) {
       s.MochizukiRenoPasses = (uint32_t)pass + 1; c = true;
+    }
+    p.disabled(false);
+    c |= renoGroup(p, s, 2, [](std::string_view key) { return key == "MochizukiRenoPassesMode"; });
+    if (s.MochizukiRenoPassesMode != 0 && p.tree(L"Fast mode options", &g_sec[17])) {
+      p.indent(true);
+      static constexpr std::string_view methods[] = {"Extrapolation", "Feedback", "Hybrid"};
+      const uint32_t method = s.MochizukiRenoFastMethod;
+      c |= renoGroup(p, s, 2, [method](std::string_view key) {
+        if (!key.starts_with("MochizukiRenoFast")) return false;
+        if (key == "MochizukiRenoFastMethod") return true;
+        if (key == "MochizukiRenoFastEditStrength") return method == 3;
+        return method < 3 && key.find(methods[method]) != std::string_view::npos;
+      });
+      p.indent(false);
     }
     c |= p.checkbox(L"Style grade", &s.styleGrade, L"Grades Natural and Cinematic after the network.");
   }
@@ -372,8 +414,8 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
     c |= p.slider(L"Intensity", &s.MochizukiRenoIntensity, 0.0f, 2.0f, L"%.2f", L"The model's intensity.");
     c |= p.slider(L"Local tone", &s.MochizukiRenoLocalTone, 0.0f, 2.0f, L"%.2f", L"The model's local lighting.");
     c |= p.slider(L"Structure", &s.MochizukiRenoLocalStructure, 0.0f, 2.0f, L"%.2f", L"The model's structure strength.");
-    c |= p.slider(L"Skin structure", &s.MochizukiRenoSkinStructure, -1.0f, 1.0f, L"%.2f",
-      L"Structure on skin; -1 is the model's own. Needs the auto mask.");
+    c |= p.slider(L"Skin structure", &s.MochizukiRenoSkinStructure, 0.0f, 2.0f, L"%.2f",
+      L"Structure on skin, 0 to 2 (1 is the model's default). Needs the auto mask.");
     c |= p.checkbox(L"Auto mask", &s.MochizukiRenoAutoMask, L"The model's character mask, so skin gets its own structure.");
     c |= p.checkbox(L"Independent skin", &s.MochizukiRenoSkinIndependent,
       L"With the mask: structure is sent at most 1 and skin as 1, so structure no longer moves faces.");
@@ -385,7 +427,8 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
     if (p.tree(L"Look details", &g_sec[13])) {
       p.indent(true);
       p.disabled(!s.MochizukiRenoLookMode);
-      c |= renoGroup(p, s, 8, "MochizukiRenoLookMode");
+      c |= renoGroup(p, s, 8, [](std::string_view key) { return key != "MochizukiRenoLookMode"; }, !s.MochizukiRenoLookMode);
+      p.disabled(!s.MochizukiRenoLookMode);
       if (p.button(L"Reset look details")) { resetLook(s); c = true; }
       p.disabled(false);
       p.indent(false);
@@ -394,9 +437,15 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
   if (p.section(L"Encoding and exposure", &g_sec[14])) {
     if (p.tree(L"Encoding", &g_sec[15])) {
       p.indent(true);
-      p.text(L"For HDR frames. NRLive captures 8-bit SDR and the runtime stays on its SDR path, so today these change "
-             L"little or nothing. The curves, AgX among them, are under Preprocess.");
+      p.text(L"From the format keeps NRLive's SDR path. SDR, Linear or PQ moves the capture to the HDR codec: the rest of "
+             L"this group, and four settings under Composition, act only then. A change rebuilds the network.");
       c |= renoGroup(p, s, 9);
+      // What white is in a frame taken as Linear; other encodings have no use for it.
+      p.disabled(s.MochizukiRenoSourceEncoding != 2 || s.MochizukiRenoLinearUnitNits > 0.f);
+      c |= p.slider(L"White point", &s.whitePoint, 0.f, 16.f, L"%.2f",
+        L"What counts as white in a frame taken as Linear, with Linear unit at 0. Higher darkens what the network sees. "
+        L"0 measures it from the frame.");
+      p.disabled(false);
       p.indent(false);
     }
     if (p.tree(L"Preprocess", &g_sec[16])) {
@@ -408,6 +457,11 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
   if (p.section(L"Temporal", &g_sec[10])) {
     c |= p.checkbox(L"Temporal history", &s.temporal, L"History along NRLive's motion vectors.");
     c |= p.slider(L"History strength", &s.historyStrength, 0.0f, 1.0f, L"%.2f");
+    bool hist16 = s.historyPrecision != 32;
+    if (p.checkbox(L"16-bit history", &hist16,
+        L"The network's history in RGBA16F, as NVIDIA's DLL keeps it (half the memory). Off keeps RGBA32F. Rebuilds the network.")) {
+      s.historyPrecision = hist16 ? 16 : 32; c = true;
+    }
     c |= p.checkbox(L"Vary noise without motion vectors", &s.noiseEveryFrame,
       L"Frames without motion vectors (or with temporal history off): the network's noise seed moves every frame, as "
       L"NVIDIA's DLL does. Off keeps it still.");
@@ -415,7 +469,7 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
   if (p.section(L"Performance", &g_sec[11])) {
     c |= p.sliderOnRelease(L"Resolution scale", &s.MochizukiRenoResolutionScale, 0.33f, 1.0f, L"%.2f",
       L"The network's resolution as a share of the frame; the result is enlarged back. A change rebuilds the network.");
-    c |= renoGroup(p, s, 7, "MochizukiRenoResolutionScale");
+    c |= renoGroup(p, s, 7, [](std::string_view key) { return key != "MochizukiRenoResolutionScale"; });
     p.disabled(!s.originalModel);
     c |= p.checkbox(L"int4 mixed", &s.int4,
       s.originalModel ? L"Original model only. Needs ACO and dlssnr-int4.bin."

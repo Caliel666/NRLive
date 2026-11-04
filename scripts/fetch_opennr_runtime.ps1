@@ -10,10 +10,12 @@
 # NRLive.exe). NVIDIA model weights are never fetched: NRLive links the dlssnr.bin /
 # dlssnr-small.bin you extracted into dlssnr-amd\ beside NRLive.exe.
 param(
-  [string]$Version = "0.5.9-opennr",
+  [string]$Version = "0.6.0-opennr",
   [string]$Sha256 = "",
   [string]$Rdna3Sha256 = "",
+  [string]$Rdna2Sha256 = "",
   [switch]$NoRdna3,
+  [switch]$NoRdna2,
   [string]$From = "",
   [string]$Destination = ""
 )
@@ -25,9 +27,15 @@ if ([string]::IsNullOrWhiteSpace($Destination)) {
 }
 
 # SHA-256 of the published packages. To move to a newer runtime, add its version here
-# with the hashes of mochizuki-<version>.zip and mochizuki-rdna3-<version>.zip and change
-# the -Version default. The RX 7000 package is an overlay with shaders-rdna3.
+# with the hashes of mochizuki-<version>.zip, mochizuki-rdna3-<version>.zip and
+# mochizuki-rdna2-<version>.zip and change the -Version default. The RX 7000 and RX 6000
+# packages are overlays with shaders-rdna3 and that network's data.
 $known = @{
+  "0.6.0-opennr" = @{
+    main  = "07f4278f805a3e98ac02ebf4f342a97d14d145b6aee75b5902a73ff13159d8ac"
+    rdna3 = "a60f9219623a7a045068a8b26d0507b6635dda0cfa036e08def41691193c394d"
+    rdna2 = "277426f48f3b431e3698d45d72367de9259a52d03222efa113e619b4b0dddde2"
+  }
   "0.5.9-opennr" = @{
     main  = "57ba906bc61f8d931840173504c5f39e3c2d81d2e66573e67d387c7736d95aa2"
     rdna3 = "47a0d9853f9d5bd030dcbd6f835050f853a0ed0b5fa63de6a7425b03237d4fd0"
@@ -36,6 +44,7 @@ $known = @{
 if ($known.ContainsKey($Version)) {
   if ([string]::IsNullOrWhiteSpace($Sha256)) { $Sha256 = $known[$Version].main }
   if ([string]::IsNullOrWhiteSpace($Rdna3Sha256)) { $Rdna3Sha256 = $known[$Version].rdna3 }
+  if ([string]::IsNullOrWhiteSpace($Rdna2Sha256)) { $Rdna2Sha256 = $known[$Version].rdna2 }
 }
 
 # Model weights (dlssnr.bin, dlssnr-small.bin and the int4 dlssnr-int4.bin made from
@@ -107,6 +116,13 @@ if (-not [string]::IsNullOrWhiteSpace($From)) {
       Write-Warning "No RX 7000 package hash for $Version; skipping shaders-rdna3."
     } else {
       Get-RuntimeZip "mochizuki-rdna3-$Version.zip" $Rdna3Sha256 $destinationFull
+    }
+  }
+  if (-not $NoRdna2) {
+    if ([string]::IsNullOrWhiteSpace($Rdna2Sha256)) {
+      Write-Warning "No RX 6000 package hash for $Version; skipping its network."
+    } else {
+      Get-RuntimeZip "mochizuki-rdna2-$Version.zip" $Rdna2Sha256 $destinationFull
     }
   }
 }

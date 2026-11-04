@@ -28,6 +28,11 @@ struct OpenNrSettings {
   float antiHaloStrength = 0.8f;
   bool passEstimate = true;
   bool noiseEveryFrame = false; // MochizukiNoiseEveryFrame
+  uint32_t historyPrecision = 16; // MochizukiHistoryPrecision: 16 RGBA16F, 32 RGBA32F; rebuilds
+  bool preprocessInverse = true;  // MochizukiPreprocessInverse
+  // MochizukiWhitePoint, NRLive's own: what counts as white in a frame taken as Linear, handed to the runtime as the
+  // exposure a game would give it (1 / white). 0: none, the runtime meters the frame.
+  float whitePoint = 0.f;
   // MochizukiPreprocess*: what the network is shown, every change taken back out of its answer.
   bool preprocess = false;
   uint32_t preprocessExposure = 1; // 0 off, 1 auto, 2 fixed (bias alone)
@@ -117,4 +122,5 @@ private:
   std::wstring m_status;
   uint64_t m_infoTick = 0;
   float m_gpuMs = -1;
+  float m_sentExposure = -1;
 };

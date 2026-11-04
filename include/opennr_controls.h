@@ -12,6 +12,11 @@ inline void fillOpenNrControls(const OpenNrSettings& s, MochizukiNrControls& c)
   c.anti_halo_margin = .25f * (1.f - std::clamp(s.antiHaloStrength, 0.f, 1.f));
   c.style_grade = s.styleGrade ? 1u : 0u;
   c.noise_every_frame = s.noiseEveryFrame ? 1u : 0u;
+  c.history_precision = s.historyPrecision == 32 ? 32u : 16u;
+  c.preprocess_inverse = s.preprocessInverse ? 1u : 0u;
+  // The stage picks its codec from the frame's format, and a capture is always BGRA8, so left alone it stays on the
+  // SDR codec, which reads no encoding key. Choosing an encoding asks for the HDR one; the default stays as it was.
+  c.linear_input = s.MochizukiRenoSourceEncoding != 0 ? 1u : 0u;
   c.preprocess = s.preprocess ? 1u : 0u;
   c.preprocess_exposure = std::min(s.preprocessExposure, 2u);
   c.preprocess_bias_ev = std::clamp(s.preprocessBias, -8.f, 8.f);
@@ -28,6 +33,9 @@ inline void fillOpenNrControls(const OpenNrSettings& s, MochizukiNrControls& c)
 #undef MZR_U
 #undef MZR_B
 }
+
+// MochizukiNrSetExposure's argument: 0 for none.
+inline float openNrExposure(const OpenNrSettings& s) { return s.whitePoint > 0.f ? 1.f / s.whitePoint : 0.f; }
 
 // int4 mixed runs as ACO's machine code only and is made from the 310.8 model:
 // with the Small model it stays stored and does not run.

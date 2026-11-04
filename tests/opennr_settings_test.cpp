@@ -18,6 +18,22 @@ int main() {
       c.reno_paper_white_scale != 2.5375f)
     return fail(2, "RenoDX defaults");
 
+  // Nothing moves the capture off its SDR codec until an encoding is chosen, and no exposure is handed over.
+  if (c.linear_input != 0 || c.history_precision != 16 || c.preprocess_inverse != 1 || c.reno_passes_mode != 0 ||
+      c.reno_skin_structure != 1.f || openNrExposure(s) != 0.f)
+    return fail(13, "0.6.0 defaults");
+  OpenNrSettings enc;
+  enc.MochizukiRenoSourceEncoding = 2;
+  enc.whitePoint = 4.f;
+  fillOpenNrControls(enc, c);
+  if (c.linear_input != 1 || c.reno_source_encoding != 2 || openNrExposure(enc) != 0.25f) return fail(14, "encoding");
+  enc = {};
+  enc.historyPrecision = 32;
+  enc.preprocessInverse = false;
+  fillOpenNrControls(enc, c);
+  if (c.history_precision != 32 || c.preprocess_inverse != 0 || c.linear_input != 0) return fail(15, "history, inverse");
+  fillOpenNrControls(OpenNrSettings{}, c);
+
   // The new keys reach the struct, limited to their ranges.
   s.preprocess = true; s.preprocessCurve = 6; s.preprocessBias = -20.f; s.preprocessContrast = 9.f; s.noiseEveryFrame = true;
   fillOpenNrControls(s, c);
