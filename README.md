@@ -1,11 +1,9 @@
 # NRLive
+NRLive is a Windows utility that captures a game or app window and presents it in a scaled output window with AMD FidelityFX Super Resolution (FSR), motion-based enhancements and AMD DLSSNR. It is built around a DXGI/D3D12 capture and presentation pipeline for Windows.
 
-<img width="1000" height="720" alt="image" src="https://github.com/user-attachments/assets/e3babe3e-afcf-400e-911b-a0f5358b5372" />
+## Where do i get it?
 
-
-NRLive is a Windows utility that captures a game or app window and presents it in a scaled output window with AMD FidelityFX Super Resolution (FSR) and motion-based enhancements. It is built around a DXGI/D3D12 capture and presentation pipeline for Windows.
-
-It is designed for situations where you want a source window to remain visible in a game or app while presenting a larger, more comfortable scaled view in a separate output surface.
+NRLive is included and managed on OpenNR: https://github.com/zmodelerlover/OpenNR-Installer
 
 ## What it does
 
@@ -14,35 +12,14 @@ NRLive can:
 - capture a target window
 - display it in a configurable output overlay/window
 - scale the captured content to a larger presentation window
-- enable AMD FSR upscaling and frame generation
-- support hotkeys for toggling the overlay, scaling, and stopping the app
-- show a HUD for status, FPS, and capture state
+- enable AMD FSR upscaling and frame generation (`--upscaler fsr4|fsr31|none`)
+- support hotkeys for toggling the overlay and stopping the app
+- configurable overlay
+- native AMD DLSSNR by [mochizuki](https://gitlab.com/mochizuki0323/DLSSNR-AMD)
 
-The general idea is simple: a small source window can be transformed into a larger output window while preserving the game/app input flow and overlay behavior.
-<img width="3550" height="1147" alt="Untitled-1" src="https://github.com/user-attachments/assets/ce6ee296-6c8b-4c27-9207-c91b2f31e447" />
+The general idea is simple: a small source window can be transformed into a larger output window while adding the effects.
 
-## So why "NR"
-
-This app was made in mind to be able to use it with DLSSNR, specifically AMD's versions
-you can also use it with optiscaler and reshade to be able to apply those to any game, specially ones with heavy anti cheat solutions
-
-## Features
-
-- Windows-only DXGI/D3D12 capture pipeline
-- AMD FSR 4 and FSR 3.1 upscaling, or native scaling (`--upscaler fsr4|fsr31|none`)
-- DLSSNR through OpenNR's `MochizukiNrRuntime.dll` (RenoDX look controls, int4, ACO, RX 7000 network), included in release packages; see [docs/OPENNR-RUNTIME.md](docs/OPENNR-RUNTIME.md)
-- Motion-vector and frame-generation support
-- Toggleable overlay HUD
-- Keyboard hotkeys for scale/unscale and stop actions
-- Portable native Windows package (NRLive.exe and its runtime dependencies)
-
-## Repository layout
-
-- `src/` — main capture, graphics, overlay, target, and FSR logic
-- `include/` — shared headers
-- `scripts/` — dependency fetch and build helpers
-- `tests/` — frame timing / limiter validation tests
-- `.github/workflows/windows-build.yml` — native Windows build and test workflow
+<img width="1920" height="1995" alt="nrliveguide" src="https://github.com/user-attachments/assets/939c0a29-fd6e-45c1-86a4-f484327b5d96" />
 
 ## Windows build instructions
 
