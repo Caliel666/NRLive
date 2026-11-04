@@ -59,21 +59,46 @@ overlay's Settings > NR tab edits the same keys and applies them on the next fra
 | Key | Default | |
 |---|---|---|
 | MochizukiOriginalModel | false | 310.8 model instead of Small |
-| MochizukiInt4 | false | int4 mixed (Original model, ACO, dlssnr-int4.bin) |
+| MochizukiInt4 | false | int4 mixed (Original model, ACO, dlssnr-int4.bin). Made from the 310.8 model only: with the Small model selected it stays stored and does not run, and the overlay greys it out |
 | MochizukiAco | true | ACO machine code; read once per NRLive run |
 | MochizukiTemporal | true | history along NRLive's motion vectors |
 | MochizukiHistoryStrength | 1.0 | |
 | MochizukiStyleGrade | true | grade Natural/Cinematic after the network |
+| MochizukiNoiseEveryFrame | false | frames without motion vectors: the network's noise seed moves every frame |
 | MochizukiCascadeDetail, MochizukiAntiHalo, MochizukiAntiHaloStrength, MochizukiPassEstimate | true, true, 0.8, true | multi-pass extras |
+| MochizukiPreprocess | false | changes what the network is shown and takes it back out of its answer; the first time it is on the network is rebuilt once |
+| MochizukiPreprocessExposure | 1 | 0 off, 1 auto, 2 fixed (the bias alone) |
+| MochizukiPreprocessBias | 0 | EV, -8..8 (the overlay's slider stops at -3..3) |
+| MochizukiPreprocessCurve | 3 | 0 none, 1 neutral, 2 Reinhard, 3 filmic, 4 GT, 5 ACES, 6 AgX |
+| MochizukiPreprocessContrast, MochizukiPreprocessSaturation | 1, 1 | 0.5..2, 0.05..2 |
 | MochizukiReno* | as OptiScaler | every RenoDX stage key in `third_party/opennr/MochizukiRenoKeys.inc`: Intensity, Style, LocalTone, LocalStructure, SkinStructure, AutoMask, Passes, ColorStrength, Look*, ... |
 
 ## Status
 
 The first line of the overlay's Settings > NR tab and NRLive.log show what the runtime is doing: the network build
 (planning, weights, pipelines n/m, and on an RX 7000 the one-time pipeline check), then the
-network size and GPU time, with "RX 7000 (experimental)" when the RDNA3 network runs. The
+network size and GPU time, with "RX 7000 (experimental)" when the RDNA3 network runs. While a
+network builds the HUD shows a bar under its items, whichever are on: the runtime's real count
+while it makes the pipelines, an animation with no number in the stages it reports no progress
+for. The pipeline check is one of those: it compiles every pipeline once in a child process,
+1 to 2 minutes on an RX 7000 (half an hour or more on an RX 6000, with a runtime that has that
+network), once per driver, the frames going on without NR until it ends. The
 runtime's own log is `opennr\mochizuki_nr.log`. If anything is missing or fails, the frame
 goes on unchanged; the NR button retries.
+
+## What the overlay leaves out
+
+Every `MochizukiReno*` key is read whether the overlay shows it or not. The NR tab groups the
+ones that change NRLive's picture as OptiScaler's menu does (Composition with its Look details,
+Encoding and exposure with Encoding and Preprocess) and has no control for: the pass 2, 3 and 4
+keys, unlocking passes past 4 and chained history (no look of their own, and each pass costs the
+whole network again), follow render resolution and the motion vector scales (NRLive's own
+vectors are at the capture's size and in the right direction).
+
+NRLive captures 8-bit SDR and the runtime stays on its SDR path whatever Source encoding says,
+so the Encoding keys and the HDR ones under Composition (codec, highlight guard, dark pedestal)
+change little or nothing today; they are there for a capture that hands it HDR. The curves that
+do act on this frame, AgX among them, are under Preprocess.
 
 ## Licenses
 

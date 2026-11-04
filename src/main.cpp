@@ -868,7 +868,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (openNrSelected && overlayDlssNrConfig().enabled) {
           // The queue timestamps around OpenNR also hold its D3D12/Vulkan fence
           // waits; the runtime's own median is the network's GPU time.
-          hs.nrBuilding = openNr.building();
+          hs.nrBuild = openNr.build();
           if (hs.nr && gt.nr >= 0 && openNr.gpuMs() >= 0) hs.gpuNrMs = openNr.gpuMs();
         }
         overlayUpdate(hs);

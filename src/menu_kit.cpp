@@ -63,6 +63,8 @@ struct Panel::Impl {
   std::vector<RECT> captionHoles;
   std::wstring tip;
   RECT tipAnchor{};
+  bool off = false;
+  float drag = 0; // an on-release slider's value while it is held
   float fontScale = 0;
   std::unique_ptr<Font> font, bold, title, note;
   std::unique_ptr<Graphics> measure, gfx;
@@ -84,10 +86,13 @@ struct Panel::Impl {
     measure = std::make_unique<Graphics>(measureDc);
   }
 
+  // Grey: everything a disabled widget draws, at less than half its alpha.
+  Color ink(const Color& c) const { return off ? Color((BYTE)(c.GetA() * 0.4f), c.GetR(), c.GetG(), c.GetB()) : c; }
+
   void fill(RECT r, float rad, const Color& c)
   {
     if (!g) return;
-    SolidBrush b(c);
+    SolidBrush b(ink(c));
     GraphicsPath p; roundPath(p, toF(r), rad * s);
     g->FillPath(&b, &p);
   }
@@ -100,7 +105,7 @@ struct Panel::Impl {
     sf.SetLineAlignment(StringAlignmentCenter);
     sf.SetTrimming(StringTrimmingEllipsisCharacter);
     sf.SetFormatFlags(StringFormatFlagsNoWrap);
-    SolidBrush b(c);
+    SolidBrush b(ink(c));
     g->DrawString(t, -1, f, toF(r), &sf, &b);
   }
 
@@ -151,7 +156,7 @@ struct Panel::Impl {
     if (!t) return;
     const int d = px(14);
     RECT r{ row.right - d, (row.top + row.bottom - d) / 2, row.right, (row.top + row.bottom + d) / 2 };
-    const bool over = hit(r);
+    const bool over = hit(off ? row : r);
     if (over) { tip = t; tipAnchor = r; }
     if (!g) return;
     Pen pen(over ? kAccentReadable : kDim, 1.2f * s);
@@ -162,6 +167,7 @@ struct Panel::Impl {
   // Click behaviour shared by every widget.
   bool behave(int id, const RECT& r, int& active, bool& hovered, bool& held)
   {
+    if (off) { hovered = held = false; return false; }
     hovered = hit(r) && (active == 0 || active == id);
     bool clicked = false;
     if (!g) {
@@ -185,6 +191,7 @@ void Panel::begin(HDC dc, const RECT& client, float scale, const Input& in)
   m->seq = 0;
   m->inBody = false;
   m->rowN = 0;
+  m->off = false;
   m->tip.clear();
   m->captionHoles.clear();
   m->fonts();
@@ -347,6 +354,40 @@ bool Panel::section(const wchar_t* title, bool* open)
   return *open;
 }
 
+bool Panel::tree(const wchar_t* title, bool* open)
+{
+  auto& d = *m;
+  RECT r = d.alloc(d.px(22), true);
+  bool hov, held;
+  if (d.behave(++d.seq, r, m_active, hov, held)) *open = !*open;
+  if (d.g) {
+    const float cx = r.left + 7 * d.s, cy = (r.top + r.bottom) / 2.0f, a = 3.5f * d.s;
+    PointF tri[3];
+    if (*open) { tri[0] = { cx - a, cy - a / 2 }; tri[1] = { cx + a, cy - a / 2 }; tri[2] = { cx, cy + a * 0.8f }; }
+    else { tri[0] = { cx - a / 2, cy - a }; tri[1] = { cx - a / 2, cy + a }; tri[2] = { cx + a * 0.8f, cy }; }
+    SolidBrush b(hov ? kAccentReadable : kText);
+    d.g->FillPolygon(&b, tri, 3);
+    RECT t = r; t.left += d.px(18);
+    d.label(title, t, d.bold.get(), hov ? kAccentReadable : kText);
+  }
+  return *open;
+}
+
+void Panel::indent(bool in)
+{
+  auto& d = *m;
+  d.closeRow();
+  const int by = d.px(14) * (in ? 1 : -1);
+  d.x0 += by;
+  d.w -= by;
+}
+
+void Panel::disabled(bool on)
+{
+  m->closeRow();
+  m->off = on;
+}
+
 bool Panel::checkbox(const wchar_t* label, bool* v, const wchar_t* tip)
 {
   auto& d = *m;
@@ -361,7 +402,7 @@ bool Panel::checkbox(const wchar_t* label, bool* v, const wchar_t* tip)
   if (d.g) {
     d.fill(box, 3, held ? kFrameActive : (hov ? kFrameHover : kFrame));
     if (*v) {
-      Pen pen(kAccentReadable, 2.0f * d.s);
+      Pen pen(d.ink(kAccentReadable), 2.0f * d.s);
       pen.SetLineJoin(LineJoinRound);
       PointF pts[3] = { { box.left + 3.5f * d.s, box.top + 8.5f * d.s },
                         { box.left + 6.5f * d.s, box.top + 11.5f * d.s },
@@ -386,6 +427,16 @@ static RECT frameOf(const RECT& row, int infoW, bool hasLabel, bool hasTip)
 
 bool Panel::slider(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip)
 {
+  return sliderImpl(label, v, lo, hi, fmt, tip, false);
+}
+
+bool Panel::sliderOnRelease(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip)
+{
+  return sliderImpl(label, v, lo, hi, fmt, tip, true);
+}
+
+bool Panel::sliderImpl(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip, bool onRelease)
+{
   auto& d = *m;
   RECT row = d.alloc(d.px(22));
   RECT f = frameOf(row, d.px(18), label != nullptr, tip != nullptr);
@@ -396,10 +447,12 @@ bool Panel::slider(const wchar_t* label, float* v, float lo, float hi, const wch
   const float old = *v;
   if (!d.g && m_active == id && d.in.down && hi > lo) {
     float t = float(d.in.mouse.x - (f.left + grab / 2)) / float(std::max(1L, f.right - f.left - grab));
-    *v = lo + std::clamp(t, 0.0f, 1.0f) * (hi - lo);
+    (onRelease ? d.drag : *v) = lo + std::clamp(t, 0.0f, 1.0f) * (hi - lo);
   }
+  if (onRelease && !d.g && m_active == id && d.in.released) *v = d.drag;
   if (d.g) {
-    const float t = hi > lo ? std::clamp((*v - lo) / (hi - lo), 0.0f, 1.0f) : 0;
+    const float shown = onRelease && held ? d.drag : *v;
+    const float t = hi > lo ? std::clamp((shown - lo) / (hi - lo), 0.0f, 1.0f) : 0;
     d.fill(f, 4, held ? kFrameActive : (hov ? kFrameHover : kFrame));
     const int gx = f.left + (int)(t * (f.right - f.left - grab));
     RECT fillR{ f.left, f.top, gx + grab / 2, f.bottom };
@@ -409,7 +462,7 @@ bool Panel::slider(const wchar_t* label, float* v, float lo, float hi, const wch
     RECT gr{ gx, f.top + d.px(2), gx + grab, f.bottom - d.px(2) };
     d.fill(gr, 3, held ? kAccentReadable : kAccentMed);
     wchar_t buf[48]{};
-    swprintf_s(buf, fmt, *v);
+    swprintf_s(buf, fmt, shown);
     d.label(buf, f, d.font.get(), kText, StringAlignmentCenter);
     RECT lr{ f.right + d.px(8), row.top, row.right - d.px(18), row.bottom };
     d.label(label, lr, d.font.get(), kText);
@@ -476,7 +529,7 @@ bool Panel::stepper(const wchar_t* label, int* v, const wchar_t* const* names, i
     d.fill(f, 4, kFrame);
     d.fill(l, 4, lhd ? kAccent : (lh ? kAccentMed : kAccentSoft));
     d.fill(r, 4, rhd ? kAccent : (rh ? kAccentMed : kAccentSoft));
-    SolidBrush ink(kText);
+    SolidBrush ink(d.ink(kText));
     const float a = 3.5f * d.s, ly = (l.top + l.bottom) / 2.0f;
     const float lx = (l.left + l.right) / 2.0f, rx = (r.left + r.right) / 2.0f;
     PointF lt[3] = { { lx + a * 0.6f, ly - a }, { lx + a * 0.6f, ly + a }, { lx - a * 0.8f, ly } };
@@ -531,7 +584,7 @@ void Panel::text(const wchar_t* s, bool dim)
   RECT r = d.alloc(h, true);
   if (d.g) {
     StringFormat sf;
-    SolidBrush b(dim ? kDim : kText);
+    SolidBrush b(d.ink(dim ? kDim : kText));
     d.g->DrawString(s, -1, d.note.get(), toF(r), &sf, &b);
   }
 }

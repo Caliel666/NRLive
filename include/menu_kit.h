@@ -33,9 +33,16 @@ public:
 
   // Collapsing header; returns whether it is open.
   bool section(const wchar_t* title, bool* open);
+  // A smaller collapsing heading inside a section; indent(true) after it, indent(false) to end.
+  bool tree(const wchar_t* title, bool* open);
+  void indent(bool in);
+  // Widgets until disabled(false) are grey and take no input. Their tip shows anywhere on the row.
+  void disabled(bool on);
   bool checkbox(const wchar_t* label, bool* v, const wchar_t* tip = nullptr);
   bool slider(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip = nullptr);
   bool slider(const wchar_t* label, int* v, int lo, int hi, const wchar_t* fmt, const wchar_t* tip = nullptr);
+  // Changes *v only when the mouse is let go: for a value whose every step costs something.
+  bool sliderOnRelease(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip = nullptr);
   bool choice(const wchar_t* label, int* v, const wchar_t* const* names, int count, const wchar_t* tip = nullptr);
   bool stepper(const wchar_t* label, int* v, const wchar_t* const* names, int count, const wchar_t* tip = nullptr);
   bool button(const wchar_t* label, bool accent = false);
@@ -51,6 +58,7 @@ public:
 
 private:
   struct Impl;
+  bool sliderImpl(const wchar_t* label, float* v, float lo, float hi, const wchar_t* fmt, const wchar_t* tip, bool onRelease);
   std::unique_ptr<Impl> m;
   int m_active = 0;
 };
