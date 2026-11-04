@@ -156,7 +156,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NRLive-windows-x64-fsr-sdk-2.3.0
-          path: |
-            build/package/**
-            build/NRLive.zip
+          path: build/NRLive.zip
           if-no-files-found: error
