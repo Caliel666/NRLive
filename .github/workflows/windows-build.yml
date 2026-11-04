@@ -121,10 +121,26 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $package = "build/package"
+          if (Test-Path -LiteralPath $package) {
+            Remove-Item -LiteralPath $package -Recurse -Force
+          }
           New-Item -ItemType Directory -Force $package | Out-Null
 
           # Package the native NRLive executable and its staged runtime files.
           Copy-Item "build/Release/*" $package -Recurse -Force
+
+          # Test binaries are needed by CTest in build/Release, but must never ship.
+          Get-ChildItem -Path $package -Recurse -File |
+            Where-Object { $_.Extension -ieq ".exe" -and $_.BaseName -match "(?i)test" } |
+            ForEach-Object {
+              Write-Host "Excluding test executable: $($_.FullName)"
+              Remove-Item -LiteralPath $_.FullName -Force
+            }
+          $remainingTestExecutables = @(Get-ChildItem -Path $package -Recurse -File |
+            Where-Object { $_.Extension -ieq ".exe" -and $_.BaseName -match "(?i)test" })
+          if ($remainingTestExecutables.Count -gt 0) {
+            throw "Test executables remain in the portable package: $($remainingTestExecutables.FullName -join ', ')"
+          }
           Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
           Copy-Item "$package/opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt" "$package/DLSSNR-AMD-LICENSE.txt" -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
