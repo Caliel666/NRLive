@@ -301,6 +301,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     }
 
     overlayInit(inst, out);
+    overlaySetNrConfig(&nrConfig, openNrSelected);
     overlaySetAdapter(gfx.device()->GetAdapterLuid());
     GpuTimer gpuTimer;
     gpuTimer.init(gfx.device(), gfx.queue());
@@ -368,6 +369,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (!running) break;
 
       pollOverlayToggle(spec);
+      pollOverlayFocus();
       if (overlayConsumeDlssNrToggle()) {
         reset = true;
         openNr.clearFailure();
@@ -376,6 +378,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         const bool selected = useOpenNr();
         if (selected != openNrSelected) {
           openNrSelected = selected;
+          overlaySetNrConfig(&nrConfig, openNrSelected);
           reset = true;
           logMain(selected ? L"DLSSNR runtime: OpenNR" : L"DLSSNR runtime: NRLiveDlssNrBridge");
         }
@@ -391,9 +394,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       // The overlay's popup can briefly remain the foreground HWND while the
       // game receives focus; don't interpret that transient as Alt-Tab.
       if (wasOverlayOpen && !overlayOpenNow) {
-        overlayCloseGraceUntil = GetTickCount64() + 500;
-        SetForegroundWindow(target);
-        setOutputFullscreen(out, mon);
+        // Closed by another application taking the foreground: the focus
+        // pause below hides the output instead.
+        if (overlayReturnsToGame()) {
+          overlayCloseGraceUntil = GetTickCount64() + 500;
+          SetForegroundWindow(target);
+          setOutputFullscreen(out, mon);
+        }
         overlaySetOpen(false); // reassert FPS HUD z-order after raising output
       }
       wasOverlayOpen = overlayOpenNow;

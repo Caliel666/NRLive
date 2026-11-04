@@ -58,6 +58,7 @@ add_executable(NRLive WIN32
   src/fastmv.cpp
   src/ui.cpp
   src/overlay.cpp
+  src/menu_kit.cpp
   src/hud.cpp
   src/hud_config.cpp
   src/sysmon.cpp

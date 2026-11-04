@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <string>
 
 static const wchar_t* OUT_CLS = L"NRLiveOutput";
 static const wchar_t* HUD_CLS = L"NRLiveHud";
@@ -36,7 +37,10 @@ static HudInfo g_hud;
 static Size g_captureSize{};
 static Size g_outputSize{};
 static bool g_overlayOpen = false;
+static bool g_returnToGame = true;
 static LONG_PTR g_savedExStyle = 0;
+static HWND g_fgAtOpen = nullptr;
+static bool g_hadFocus = false;
 
 void setCaptureTarget(HWND target) { g_target = target; }
 
@@ -431,7 +435,7 @@ static void applyOverlayActivation(bool open)
     // keyboard input.  SetForegroundWindow can bring the game window to
     // the top of the z-order, so we re-assert NRLive's HWND_TOPMOST
     // AFTER it to guarantee we stay above the game.
-    if (g_target && IsWindow(g_target)) {
+    if (g_returnToGame && g_target && IsWindow(g_target)) {
       AllowSetForegroundWindow(ASFW_ANY);
       SetForegroundWindow(g_target);
     }
@@ -451,13 +455,14 @@ void releaseCursorClip()
   hideDrawnCursor();
 }
 
-void setOverlayOpen(bool open)
+void setOverlayOpen(bool open, bool returnToGame)
 {
   if (g_overlayOpen == open) {
     if (!open && GetCapture() == g_output) ReleaseCapture();
     return;
   }
   g_overlayOpen = open;
+  g_returnToGame = open || returnToGame;
 
   if (g_overlayHud && IsWindow(g_overlayHud)) {
     ShowWindow(g_overlayHud, open ? SW_SHOWNOACTIVATE : SW_HIDE);
@@ -470,7 +475,61 @@ void setOverlayOpen(bool open)
   // and they become invisible.
   applyOverlayActivation(open);
   overlaySetOpen(open);
+  if (open) {
+    g_fgAtOpen = GetForegroundWindow();
+    DWORD pid = 0;
+    if (g_fgAtOpen) GetWindowThreadProcessId(g_fgAtOpen, &pid);
+    g_hadFocus = pid == GetCurrentProcessId();
+  }
 }
+
+bool overlayReturnsToGame() { return g_returnToGame; }
+
+void pollOverlayFocus()
+{
+  // Esc closes it too. Polled: when the game kept the keyboard focus the key
+  // never reaches the output window.
+  static bool escWasDown = false;
+  const bool escDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+  const bool escPressed = escDown && !escWasDown;
+  escWasDown = escDown;
+  if (!g_overlayOpen) return;
+  if (escPressed) { setOverlayOpen(false); return; }
+  HWND fg = GetForegroundWindow();
+  if (!fg) return; // between activations
+  DWORD pid = 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (pid == GetCurrentProcessId()) { g_hadFocus = true; return; }
+  // Our activation did not take and the game kept the foreground: still open.
+  if (!g_hadFocus && fg == g_fgAtOpen) return;
+  // The game (a click that reached it) or another application took the
+  // foreground: close as the hotkey does, handing focus back only to the game.
+  HWND root = GetAncestor(fg, GA_ROOTOWNER);
+  HWND targetRoot = g_target ? GetAncestor(g_target, GA_ROOTOWNER) : nullptr;
+  const bool game = fg == g_target || (root && root == targetRoot);
+  setOverlayOpen(false, game);
+}
+
+// OptiScaler or ReShade loaded beside NRLive draw their menus on the output
+// window and need its clicks; without them a click there closes the overlay.
+static bool hostMenuLoaded()
+{
+  static int cached = -1;
+  if (cached >= 0) return cached != 0;
+  wchar_t exe[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  std::wstring dir = exe;
+  dir.resize(dir.find_last_of(L"\\/") + 1);
+  bool found = GetModuleHandleW(L"ReShade64.dll") || GetModuleHandleW(L"OptiScaler.dll");
+  for (const wchar_t* name : { L"dxgi.dll", L"d3d12.dll", L"winmm.dll", L"version.dll", L"dbghelp.dll" }) {
+    HMODULE m = GetModuleHandleW(name);
+    wchar_t path[MAX_PATH]{};
+    if (m && GetModuleFileNameW(m, path, MAX_PATH) && _wcsnicmp(path, dir.c_str(), dir.size()) == 0) found = true;
+  }
+  cached = found ? 1 : 0;
+  return found;
+}
+
 void setScaleSizes(Size capture, Size output)
 {
   g_captureSize = capture;
@@ -498,7 +557,8 @@ static LRESULT CALLBACK outProc(HWND h, UINT m, WPARAM w, LPARAM l)
   case WM_MOUSEACTIVATE:
     // Game mode: never steal activation. Overlay mode: accept activation so
     // OptiScaler / ReShade ImGui can take mouse + keyboard.
-    if (g_overlayOpen) return MA_ACTIVATE;
+    // Without them the click only closes the overlay; the game keeps focus.
+    if (g_overlayOpen && hostMenuLoaded()) return MA_ACTIVATE;
     return MA_NOACTIVATE;
   case WM_MOUSEMOVE:
   case WM_LBUTTONDOWN: case WM_LBUTTONUP:
@@ -506,10 +566,19 @@ static LRESULT CALLBACK outProc(HWND h, UINT m, WPARAM w, LPARAM l)
   case WM_MBUTTONDOWN: case WM_MBUTTONUP:
   case WM_MOUSEWHEEL:
     if (g_overlayOpen) {
+      if (m == WM_MOUSEWHEEL) {
+        // The settings panel never takes focus; its wheel arrives here.
+        POINT p{ GET_X_LPARAM(l), GET_Y_LPARAM(l) };
+        HWND under = WindowFromPoint(p);
+        if (under && under != h) { PostMessageW(under, m, w, l); return 0; }
+      }
       if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN)
         SetCapture(h);
-      if (m == WM_LBUTTONUP || m == WM_RBUTTONUP || m == WM_MBUTTONUP)
+      if (m == WM_LBUTTONUP || m == WM_RBUTTONUP || m == WM_MBUTTONUP) {
         ReleaseCapture();
+        // A click outside the overlay's windows goes back to the game.
+        if (!hostMenuLoaded()) { setOverlayOpen(false); return 0; }
+      }
       clipCursorToOutput(true);
       return DefWindowProcW(h, m, w, l);
     }

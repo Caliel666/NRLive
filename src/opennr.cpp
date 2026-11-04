@@ -127,6 +127,47 @@ bool NrConfigWatcher::refresh()
   return true;
 }
 
+void NrConfigWatcher::save()
+{
+  const std::wstring ini = iniPath();
+  const auto& s = m_cfg.openNr;
+  auto put = [&](const wchar_t* key, const std::wstring& v) {
+    WritePrivateProfileStringW(L"OpenNR", key, v.c_str(), ini.c_str());
+  };
+  auto b = [](bool v) { return std::wstring(v ? L"true" : L"false"); };
+  auto f = [](float v) {
+    wchar_t t[32]{};
+    swprintf_s(t, L"%.3f", v);
+    std::wstring w = t;
+    while (w.size() > 1 && w.back() == L'0') w.pop_back();
+    if (w.back() == L'.') w.pop_back();
+    return w;
+  };
+  put(L"MochizukiOriginalModel", b(s.originalModel));
+  put(L"MochizukiInt4", b(s.int4));
+  put(L"MochizukiAco", b(s.aco));
+  put(L"MochizukiTemporal", b(s.temporal));
+  put(L"MochizukiHistoryStrength", f(s.historyStrength));
+  put(L"MochizukiStyleGrade", b(s.styleGrade));
+  put(L"MochizukiCascadeDetail", b(s.cascadeDetail));
+  put(L"MochizukiAntiHalo", b(s.antiHalo));
+  put(L"MochizukiAntiHaloStrength", f(s.antiHaloStrength));
+  put(L"MochizukiRenoStyle", std::to_wstring(s.MochizukiRenoStyle));
+  put(L"MochizukiRenoPasses", std::to_wstring(s.MochizukiRenoPasses));
+  put(L"MochizukiRenoAutoMask", b(s.MochizukiRenoAutoMask));
+  put(L"MochizukiRenoIntensity", f(s.MochizukiRenoIntensity));
+  put(L"MochizukiRenoLocalTone", f(s.MochizukiRenoLocalTone));
+  put(L"MochizukiRenoLocalStructure", f(s.MochizukiRenoLocalStructure));
+  put(L"MochizukiRenoSkinStructure", f(s.MochizukiRenoSkinStructure));
+  put(L"MochizukiRenoColorStrength", f(s.MochizukiRenoColorStrength));
+  put(L"MochizukiRenoTransferStrength", f(s.MochizukiRenoTransferStrength));
+  put(L"MochizukiRenoResolutionScale", f(s.MochizukiRenoResolutionScale));
+  // Our own write is not a change to read back.
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &data))
+    m_stamp = (uint64_t(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+}
+
 struct OpenNrRuntime::Api {
   LmxxfNrApi table{};
   PFN_MochizukiNrSetControls setControls = nullptr;
