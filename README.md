@@ -1,6 +1,8 @@
 # NRLive
 NRLive is a Windows utility that captures a game or app window and presents it in a scaled output window with AMD FidelityFX Super Resolution (FSR), motion-based enhancements and AMD DLSSNR. It is built around a DXGI/D3D12 capture and presentation pipeline for Windows.
 
+<img width="1305" height="872" alt="Pasted Image" src="https://github.com/user-attachments/assets/86002dac-da00-4899-b1b0-22b7c0a5b098" />
+
 ## Where do i get it?
 
 NRLive is included and managed on OpenNR: https://github.com/zmodelerlover/OpenNR-Installer
