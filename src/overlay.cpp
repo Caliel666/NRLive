@@ -611,21 +611,25 @@ static void runPending(HWND h) {
 }
 
 // One mouse event: the panel's interaction pass, then what it changed.
-static void panelEvent(HWND h) {
+static void panelEvent(HWND h, bool forceRepaint = true) {
   RECT rc{}; GetClientRect(h, &rc);
   g_panel->begin(nullptr, rc, uiScale(), g_in);
   panelUi(*g_panel);
+  const bool hoverChanged = g_panel->takeHoverChanged();
   g_in.pressed = g_in.released = false;
   g_in.wheel = 0;
+  bool settingsChanged = false;
   if (!g_in.down && (g_dirtyCfg || g_dirtyNr)) {
     if (g_dirtyNr && g_nrCfg) g_nrCfg->save();
     if (g_dirtyCfg) saveCfg();
     g_dirtyCfg = g_dirtyNr = false;
     g_saveStatus = L"Saved to scaleconfig.ini";
     if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
+    settingsChanged = true;
   }
   fitSettings();
-  InvalidateRect(h, nullptr, FALSE);
+  if (forceRepaint || hoverChanged || settingsChanged)
+    InvalidateRect(h, nullptr, FALSE);
   if (g_pending != Pending::None) runPending(h);
 }
 
@@ -696,7 +700,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     g_in.mouse = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, h, 0 };
     TrackMouseEvent(&tme);
-    panelEvent(h); return 0;
+    panelEvent(h, false); return 0;
   }
   case WM_MOUSELEAVE:
     if (!g_in.down) { g_in.mouse = {-1, -1}; InvalidateRect(h, nullptr, FALSE); }
