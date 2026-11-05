@@ -46,6 +46,7 @@ struct OverlayFrameStats {
   float sourceMs = 0;          // interval between captured frames
   Size capture{}, output{};
   bool fsr = false, nr = false;
+  uint32_t fgMultiplier = 2; // presented output frames per captured source frame
   NrBuild nrBuild;             // OpenNR's network build
   float latencyMs = -1;        // frame acquired -> present call, <0 unknown
   float gpuMotionMs = -1, gpuNrMs = -1, gpuFsrMs = -1, gpuTotalMs = -1;
