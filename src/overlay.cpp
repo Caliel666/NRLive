@@ -867,6 +867,10 @@ void overlaySetDlssNrEnabled(bool enabled) {
 }
 bool overlayFgEnabled() { return g_fgEnabled; }
 int overlayFgBackend() { return g_fgBackend; }
+void overlaySetFgBackend(int backend) {
+  g_fgBackend = std::clamp(backend, 0, 1);
+  if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
+}
 int overlayXeMfgMultiplier() { return g_xeMfgMultiplier; }
 void overlaySetFgEnabled(bool enabled) {
   g_fgEnabled = enabled;
