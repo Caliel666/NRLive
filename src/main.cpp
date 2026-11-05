@@ -416,7 +416,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       IDXGISwapChain4* wrappedSwapChain = nullptr;
       logMain(L"XeSS MFG initialization call begin");
       fgOk = xeMfg.init(gfx.device(), display, applicationSwapChain, gfx.queue(), &wrappedSwapChain);
-      if (applicationSwapChain) applicationSwapChain->Release();
+      if (applicationSwapChain) {
+        logMain(L"XeSS MFG releasing application swapchain reference not consumed by initialization");
+        applicationSwapChain->Release();
+        applicationSwapChain = nullptr;
+      }
       logMain(fgOk ? L"XeSS MFG initialization call returned success"
                    : L"XeSS MFG initialization call returned failure: " + xeMfg.lastError());
       if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
