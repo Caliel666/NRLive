@@ -534,7 +534,7 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display, HWND output,
         params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;
         logEvent("xefg_init_swapchain_desc_begin",
             "\"app_buffers\":" + std::to_string(swapChainDesc.BufferCount) +
-            ",\"native_buffers_requested\":8);
+            ",\"native_buffers_requested\":8");
 
         // InitFromSwapChainDesc creates the replacement chain after NRLive has
         // released its original chain. Scope the DXGI factory call so only a
