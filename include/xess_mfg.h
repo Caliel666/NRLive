@@ -39,6 +39,7 @@ private:
     ID3D12Device* m_device = nullptr;
     uint32_t m_frameId = 0;
     uint32_t m_multiplier = 2;
+    uint32_t m_framesPresented = 1;
     bool m_active = false;
     bool m_failed = false;
     bool m_xellFailed = false;
