@@ -4,11 +4,11 @@
 #include <cstdint>
 #include <span>
 #include <string>
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 namespace xess_payload {
-using Programs = std::unordered_map<std::string, std::vector<unsigned char>>;
+using Programs = std::map<std::string, std::vector<unsigned char>>;
 struct Replacement {
     const char* name{};
     const char* nativeHash{};
