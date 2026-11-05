@@ -1,5 +1,6 @@
 #include "menu_kit.h"
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <cwchar>
 #include <string>
