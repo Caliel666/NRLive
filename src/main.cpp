@@ -476,6 +476,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&lastCaptured);
 
+    auto qpcDurationMs = [&freq](const LARGE_INTEGER& begin, const LARGE_INTEGER& end) {
+      return (end.QuadPart - begin.QuadPart) * 1000.0 / double(freq.QuadPart);
+    };
+    struct CpuStageMetric {
+      double totalMs = 0.0;
+      double maxMs = 0.0;
+      void add(double value) { totalMs += value; maxMs = std::max(maxMs, value); }
+      double average(uint32_t samples) const { return samples ? totalMs / samples : 0.0; }
+      void clear() { totalMs = 0.0; maxMs = 0.0; }
+    };
+    uint32_t xeCpuProfileSamples = 0;
+    double xeSourceIntervalTotalMs = 0.0;
+    CpuStageMetric xeCaptureWaitCpu, xeBeginCpu, xePrepareCpu, xePresentCpu,
+                   xeAfterPresentCpu, xeFrameCpu;
+
     ShowWindow(out, SW_SHOWNOACTIVATE);
     QueryPerformanceCounter(&lastCaptured); // exclude initialization from the first captured-frame interval
     /* HUD starts hidden; Ctrl+Home (or --overlaykey) toggles it */
@@ -628,6 +643,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       Size cs{};
       uint64_t fenceVal = 0;
       LARGE_INTEGER acquireStart{}, acquireEnd{}, renderStart{}, renderEnd{};
+      LARGE_INTEGER queueWaitStart{}, queueWaitEnd{}, stageStart{}, stageEnd{};
+      double xeCaptureWaitMs = 0.0, xeBeginMs = 0.0, xePrepareMs = 0.0;
+      double xePresentMs = 0.0, xeAfterPresentMs = 0.0;
       QueryPerformanceCounter(&acquireStart);
       if (!cap.acquire(color, cs, fenceVal)) {
         // No new capture frame yet — do not re-submit with stale resource states.
@@ -642,8 +660,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       loopMs = (float)((now.QuadPart - lastCaptured.QuadPart) * 1000.0 / double(freq.QuadPart));
       lastCaptured = now;
       if (loopMs > 0.001f) fps = frame_timing::fpsFromFrameDeltaMs(loopMs);
-      if (cap.fence() && fenceVal)
+      if (cap.fence() && fenceVal) {
+        if (xeMfgSelected) QueryPerformanceCounter(&queueWaitStart);
         gfx.queue()->Wait(cap.fence(), fenceVal);
+        if (xeMfgSelected) {
+          QueryPerformanceCounter(&queueWaitEnd);
+          xeCaptureWaitMs = qpcDurationMs(queueWaitStart, queueWaitEnd);
+        }
+      }
       lastCs = cs;
       setScaleSizes(cs, display);
       if (!gfx.ensureAuxTextures(cs)) throw std::runtime_error("auxiliary graphics textures could not be resized");
@@ -674,7 +698,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
       if (xeMfgSelected && fgOk)
         xeMfg.markSimulationEndAndRenderSubmitStart();
+      if (xeMfgSelected) QueryPerformanceCounter(&stageStart);
       gfx.begin();
+      if (xeMfgSelected) {
+        QueryPerformanceCounter(&stageEnd);
+        xeBeginMs = qpcDurationMs(stageStart, stageEnd);
+      }
       auto* cmd = gfx.cmd();
       gpuTimer.setEnabled(overlayWantsGpuTimes());
       gpuTimer.mark(cmd, GpuTimer::Begin);
@@ -898,9 +927,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
           }
           cmd->ResourceBarrier(2, toRead);
-          fgPrepared = xeMfgSelected
-              ? xeMfg.prepare(cmd, depth, mv, cs, dt, resetThisFrame, true, overlayXeMfgMultiplier())
-              : fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
+          if (xeMfgSelected) {
+            QueryPerformanceCounter(&stageStart);
+            fgPrepared = xeMfg.prepare(cmd, depth, mv, cs, dt, resetThisFrame, true, overlayXeMfgMultiplier());
+            QueryPerformanceCounter(&stageEnd);
+            xePrepareMs = qpcDurationMs(stageStart, stageEnd);
+          } else {
+            fgPrepared = fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
+          }
           D3D12_RESOURCE_BARRIER toWrite[2]{};
           for (int i = 0; i < 2; ++i) {
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -912,9 +946,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           }
           cmd->ResourceBarrier(2, toWrite);
         } else {
-          fgPrepared = xeMfgSelected
-              ? xeMfg.prepare(cmd, nullptr, nullptr, cs, dt, resetThisFrame, false, overlayXeMfgMultiplier())
-              : fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
+          if (xeMfgSelected) {
+            QueryPerformanceCounter(&stageStart);
+            fgPrepared = xeMfg.prepare(cmd, nullptr, nullptr, cs, dt, resetThisFrame, false, overlayXeMfgMultiplier());
+            QueryPerformanceCounter(&stageEnd);
+            xePrepareMs = qpcDurationMs(stageStart, stageEnd);
+          } else {
+            fgPrepared = fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
+          }
         }
         if (!fgPrepared && runFgThisFrame) {
           fgEnabled = false;
@@ -966,13 +1005,27 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
-      if (xeMfgSelected) {
+      if (xeMfgSelected && fgOk) {
+        QueryPerformanceCounter(&stageStart);
         gfx.present([](void* context) {
           static_cast<XeMfgFrameGeneration*>(context)->markSubmittedAndPresentStart();
         }, &xeMfg);
-      } else
+        QueryPerformanceCounter(&stageEnd);
+        xePresentMs = qpcDurationMs(stageStart, stageEnd);
+      } else if (xeMfgSelected) {
+        // A failed or unavailable XeMFG context must not keep routing frames
+        // through its proxy swapchain.
+        gfx.present();
+      } else {
         fg.present(gfx); // lock spans proxy Present and its synchronous FG callback
-      const bool xeMfgGenerated = xeMfgSelected && fgOk ? xeMfg.afterPresent() : false;
+      }
+      bool xeMfgGenerated = false;
+      if (xeMfgSelected && fgOk) {
+        QueryPerformanceCounter(&stageStart);
+        xeMfgGenerated = xeMfg.afterPresent();
+        QueryPerformanceCounter(&stageEnd);
+        xeAfterPresentMs = qpcDurationMs(stageStart, stageEnd);
+      }
       overlaySetFgActive(runFgThisFrame && fgPrepared &&
                          (xeMfgSelected ? xeMfgGenerated : !fg.failed()));
       openNr.retire(); // its consumer list went with Present
@@ -984,11 +1037,64 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (cliMode && hasConsole())
           printCli((xeMfgSelected ? L"XeSS MFG" : L"FSR FG") + std::wstring(L" disabled after generation failure: ") + fgError);
         setStatus(out, fgError.c_str());
+
+        // XeFG failure leaves the proxy swapchain alive even after generation
+        // is disabled. Drain it, destroy XeFG/XeLL in order, and restore a
+        // normal DXGI swapchain so a failed FG attempt cannot keep the slower
+        // proxy Present path in the render loop.
+        if (xeMfgSelected) {
+          logMain(L"XeSS MFG runtime failed; restoring ordinary DXGI output");
+          gfx.waitForGpu();
+          gfx.releaseSwapChainForWrap();
+          xeMfg.shutdown();
+          if (!gfx.rebuildSwapChain(display))
+            throw std::runtime_error("could not restore ordinary DXGI swapchain after XeSS MFG failure");
+          fgOk = false;
+          logMain(L"Ordinary DXGI output restored after XeSS MFG failure");
+        }
       }
       QueryPerformanceCounter(&renderEnd);
       const double acquireMs = (acquireEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       const double renderCpuMs = (renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       trace.record(cap.totalFrames(), loopMs, acquireMs, renderCpuMs, cs, display, spec.motionModeText, usedFsr);
+
+      if (xeMfgSelected) {
+        ++xeCpuProfileSamples;
+        xeSourceIntervalTotalMs += loopMs;
+        xeCaptureWaitCpu.add(xeCaptureWaitMs);
+        xeBeginCpu.add(xeBeginMs);
+        xePrepareCpu.add(xePrepareMs);
+        xePresentCpu.add(xePresentMs);
+        xeAfterPresentCpu.add(xeAfterPresentMs);
+        xeFrameCpu.add(renderCpuMs);
+        if (xeCpuProfileSamples >= 120) {
+          const double samples = static_cast<double>(xeCpuProfileSamples);
+          const double sourceFps = xeSourceIntervalTotalMs > 0.001
+              ? samples * 1000.0 / xeSourceIntervalTotalMs : 0.0;
+          logMain(L"XeMFG CPU profile samples=" + std::to_wstring(xeCpuProfileSamples) +
+              L" source_fps=" + std::to_wstring(sourceFps) +
+              L" capture_queue_wait_avg/max_ms=" + std::to_wstring(xeCaptureWaitCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeCaptureWaitCpu.maxMs) +
+              L" gfx_begin_avg/max_ms=" + std::to_wstring(xeBeginCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeBeginCpu.maxMs) +
+              L" prepare_avg/max_ms=" + std::to_wstring(xePrepareCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xePrepareCpu.maxMs) +
+              L" proxy_present_avg/max_ms=" + std::to_wstring(xePresentCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xePresentCpu.maxMs) +
+              L" after_present_avg/max_ms=" + std::to_wstring(xeAfterPresentCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeAfterPresentCpu.maxMs) +
+              L" full_frame_cpu_avg/max_ms=" + std::to_wstring(xeFrameCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeFrameCpu.maxMs));
+          xeCpuProfileSamples = 0;
+          xeSourceIntervalTotalMs = 0.0;
+          xeCaptureWaitCpu.clear();
+          xeBeginCpu.clear();
+          xePrepareCpu.clear();
+          xePresentCpu.clear();
+          xeAfterPresentCpu.clear();
+          xeFrameCpu.clear();
+        }
+      }
 
       gpuTimer.frameDone();
       {
