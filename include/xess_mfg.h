@@ -11,7 +11,9 @@ class XeMfgFrameGeneration {
 public:
     XeMfgFrameGeneration();
     ~XeMfgFrameGeneration();
-    bool init(ID3D12Device* device, Size display, IDXGISwapChain4* applicationSwapChain,
+    // applicationSwapChain is an owned reference. It is set to nullptr only
+    // after XeSS successfully consumes/releases it in InitFromSwapChain.
+    bool init(ID3D12Device* device, Size display, IDXGISwapChain4*& applicationSwapChain,
               ID3D12CommandQueue* queue, IDXGISwapChain4** wrappedSwapChain);
     bool prepare(ID3D12GraphicsCommandList* commandList, ID3D12Resource* depth,
                  ID3D12Resource* motionVectors, Size render, float frameTimeMs,
