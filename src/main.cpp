@@ -672,6 +672,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       // dt for FSR — use the frame ms from the top-of-loop QPC (stored in fps)
       float dt = frame_timing::clampFrameDeltaMs(fps > 0.001f ? 1000.0f / fps : (1000.0f / 60.0f));
 
+      if (xeMfgSelected && fgOk)
+        xeMfg.markSimulationEndAndRenderSubmitStart();
       gfx.begin();
       auto* cmd = gfx.cmd();
       gpuTimer.setEnabled(overlayWantsGpuTimes());
@@ -964,9 +966,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
-      if (xeMfgSelected)
-        gfx.present();
-      else
+      if (xeMfgSelected) {
+        gfx.present([](void* context) {
+          static_cast<XeMfgFrameGeneration*>(context)->markSubmittedAndPresentStart();
+        }, &xeMfg);
+      } else
         fg.present(gfx); // lock spans proxy Present and its synchronous FG callback
       const bool xeMfgGenerated = xeMfgSelected && fgOk ? xeMfg.afterPresent() : false;
       overlaySetFgActive(runFgThisFrame && fgPrepared &&
