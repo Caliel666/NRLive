@@ -11,10 +11,12 @@ class XeMfgFrameGeneration {
 public:
     XeMfgFrameGeneration();
     ~XeMfgFrameGeneration();
-    // applicationSwapChain is an owned reference. It is set to nullptr only
-    // after XeSS successfully consumes/releases it in InitFromSwapChain.
-    bool init(ID3D12Device* device, Size display, IDXGISwapChain4*& applicationSwapChain,
-              ID3D12CommandQueue* queue, IDXGISwapChain4** wrappedSwapChain);
+    // The original app swapchain must already be released. XeSS creates a
+    // replacement from this description; the scoped factory hook raises only
+    // its internal native presentation chain's buffer count.
+    bool init(ID3D12Device* device, Size display, HWND output, IDXGIFactory2* factory,
+              const DXGI_SWAP_CHAIN_DESC1& swapChainDesc, ID3D12CommandQueue* queue,
+              IDXGISwapChain4** wrappedSwapChain);
     bool prepare(ID3D12GraphicsCommandList* commandList, ID3D12Resource* depth,
                  ID3D12Resource* motionVectors, Size render, float frameTimeMs,
                  bool reset, bool enabled, uint32_t multiplier);
