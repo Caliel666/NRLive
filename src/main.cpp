@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <fstream>
 #include <cstring>
+#include <cstdio>
 
 static std::wstring logDirectory()
 {
@@ -40,6 +41,45 @@ static void logMain(const std::wstring& message)
 {
   std::wofstream file(logDirectory() + L"NRLive.log", std::ios::out | std::ios::app);
   if (file) file << message << L"\n";
+}
+
+static LONG WINAPI logUnhandledException(EXCEPTION_POINTERS* info)
+{
+  wchar_t path[MAX_PATH]{};
+  const DWORD count = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  if (count && count < MAX_PATH) {
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (slash) {
+      wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"NRLive-crash.log");
+      HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (file != INVALID_HANDLE_VALUE) {
+        char line[512]{};
+        const DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+        const void* address = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr;
+        int length = snprintf(line, sizeof(line),
+            "Unhandled native exception: code=0x%08lX address=%p",
+            static_cast<unsigned long>(code), address);
+        if (info && info->ExceptionRecord &&
+            code == EXCEPTION_ACCESS_VIOLATION &&
+            info->ExceptionRecord->NumberParameters >= 2) {
+          length += snprintf(line + length, sizeof(line) - static_cast<size_t>(length),
+              " operation=%llu target=0x%llX",
+              static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[0]),
+              static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]));
+        }
+        if (length > 0 && static_cast<size_t>(length) < sizeof(line)) {
+          line[length++] = '\\r';
+          line[length++] = '\\n';
+          DWORD written = 0;
+          WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
+          FlushFileBuffers(file);
+        }
+        CloseHandle(file);
+      }
+    }
+  }
+  return EXCEPTION_EXECUTE_HANDLER;
 }
 
 static bool hasConsole() { return GetConsoleWindow() != nullptr; }
@@ -125,6 +165,7 @@ static bool stopHotkeyDown(UINT modifiers, UINT vk)
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 {
+  SetUnhandledExceptionFilter(logUnhandledException);
   // Windows Graphics Capture uses WinRT activation and frame-pool objects.
   // Initialize the render thread's WinRT apartment before any capture object
   // is created; without this, CreateForWindow can fail with E_INVALIDARG on
@@ -295,17 +336,42 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
     AmdOf amdof;
     FastMv fastmv;
+    logMain(L"Motion pipeline initialization begin: " + spec.motionModeText);
     if (pipelineOk) {
-      amdof.init(gfx.device(), gfx.queue(), render, false); // existing implementation
-      if (spec.motionMode == TargetSpec::MotionMode::Fast)
-        fastmv.init(gfx.device(), render);
+      if (spec.motionMode == TargetSpec::MotionMode::Fast) {
+        logMain(L"FastMV pipeline creation begin");
+        const bool fastReady = fastmv.init(gfx.device(), render);
+        logMain(fastReady ? L"FastMV pipeline ready"
+                          : L"FastMV pipeline FAILED: " + fastmv.lastError());
+        if (!fastReady) {
+          logMain(L"Falling back to AMD optical-flow motion vectors");
+          const bool ofReady = amdof.init(gfx.device(), gfx.queue(), render, false);
+          logMain(ofReady ? L"AMD optical-flow fallback ready"
+                          : L"AMD optical-flow fallback FAILED: " + amdof.lastError());
+          if (ofReady) {
+            spec.motionMode = TargetSpec::MotionMode::AmdOf;
+            spec.motionModeText = L"amdof";
+          }
+        }
+      } else {
+        logMain(L"AMD optical-flow pipeline creation begin");
+        const bool ofReady = amdof.init(gfx.device(), gfx.queue(), render, false);
+        logMain(ofReady ? L"AMD optical-flow pipeline ready"
+                        : L"AMD optical-flow pipeline FAILED: " + amdof.lastError());
+      }
+    } else {
+      logMain(L"Motion pipeline skipped because the upscaler pipeline is unavailable");
     }
 
-    overlayInit(inst, out);
+    logMain(L"Overlay initialization begin");
+    const bool overlayReady = overlayInit(inst, out);
+    logMain(overlayReady ? L"Overlay initialization OK" : L"Overlay initialization FAILED");
     overlaySetNrConfig(&nrConfig, openNrSelected);
     overlaySetAdapter(gfx.device()->GetAdapterLuid());
     GpuTimer gpuTimer;
-    gpuTimer.init(gfx.device(), gfx.queue());
+    logMain(L"GPU timer initialization begin");
+    const bool gpuTimerReady = gpuTimer.init(gfx.device(), gfx.queue());
+    logMain(gpuTimerReady ? L"GPU timer initialization OK" : L"GPU timer unavailable");
     fsr.setSharpening(true, overlaySharpness());
     overlaySetFsrEnabled(fsrEnabled);
     setOverlayHud(nullptr);
@@ -323,12 +389,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     XeMfgFrameGeneration xeMfg;
     bool fgOk = false;
     if (xeMfgSelected) {
+      logMain(L"XeSS MFG selected; application swapchain handoff begin");
       IDXGISwapChain4* applicationSwapChain = gfx.swapChain();
+      logMain(applicationSwapChain ? L"XeSS MFG application swapchain acquired"
+                                   : L"XeSS MFG ERROR: application swapchain is null");
       if (applicationSwapChain) applicationSwapChain->AddRef();
       gfx.releaseSwapChainForWrap();
+      logMain(L"XeSS MFG released Graphics-owned swapchain references");
       IDXGISwapChain4* wrappedSwapChain = nullptr;
+      logMain(L"XeSS MFG initialization call begin");
       fgOk = xeMfg.init(gfx.device(), display, applicationSwapChain, gfx.queue(), &wrappedSwapChain);
       if (applicationSwapChain) applicationSwapChain->Release();
+      logMain(fgOk ? L"XeSS MFG initialization call returned success"
+                   : L"XeSS MFG initialization call returned failure: " + xeMfg.lastError());
       if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
         fgOk = false;
         gfx.releaseSwapChainForWrap();
@@ -336,6 +409,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         logMain(L"XeSS MFG wrapped swapchain adoption failed");
       }
       if (wrappedSwapChain) wrappedSwapChain->Release();
+      logMain(L"XeSS MFG swapchain handoff finished");
       logMain(fgOk ? L"XeSS MFG init OK: " + xeMfg.lastError()
                    : L"XeSS MFG init FAILED: " + xeMfg.lastError());
     } else {
@@ -352,6 +426,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       }
     }
     if (!fgOk) {
+      logMain(L"Frame-generation initialization failed; rebuilding ordinary output swapchain");
       if (!gfx.rebuildSwapChain(display))
         throw std::runtime_error("could not rebuild DXGI swapchain after frame-generation initialization failed");
       logMain(L"Ordinary swapchain rebuilt after frame-generation initialization failure");
@@ -365,6 +440,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
                                      : L"FSR FG unavailable: " + fg.lastError()));
     }
 
+    logMain(L"Startup initialization complete; entering capture/render loop");
     FrameLimiter frameLimiter;
     bool reset = true, running = true;
     bool capturePausedForFocus = false;
