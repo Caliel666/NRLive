@@ -4,14 +4,14 @@ XeSS MFG is an experimental **native NRLive D3D12 output backend**. It is not a 
 
 ## Build-time SDK
 
-The Windows CI workflow downloads Intel XeSS SDK 3.0.2 and verifies the archive SHA-256 before compiling. For a local build, extract the same SDK and pass its root directory to CMake:
+The Windows CI workflow downloads Intel XeSS SDK 3.0.2 and verifies the archive SHA-256 before compiling. It also downloads the x64 runtime pair and MFG Unlocker v1.7.0, verifies the Unlocker archive, and stages all three files under `build/Release/xess/` to check the runtime layout. Those separately licensed binaries are removed before the public NRLive ZIP is assembled. For a local build, extract the same SDK and pass its root directory to CMake:
 
 \`\`\`powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
 \`\`\`
 
-For a local build, add \`-DXESS_SDK_ROOT="C:/sdk/XeSS_SDK_3.0.2"\` together with the existing FFX SDK arguments. The root passed to \`XESS_SDK_ROOT\` must contain \`inc/xess_fg\` and \`inc/xell\`. Public SDK headers are a build dependency only. NRLive does not bundle Intel's runtime DLLs.
+For a local build, add \`-DXESS_SDK_ROOT="C:/sdk/XeSS_SDK_3.0.2"\` together with the existing FFX SDK arguments. The root passed to \`XESS_SDK_ROOT\` must contain \`inc/xess_fg\` and \`inc/xell\`. Public SDK headers are a build dependency only. NRLive's public portable ZIP does not bundle Intel's runtime DLLs or the MFG Unlocker payload.
 
 ## Runtime files
 
