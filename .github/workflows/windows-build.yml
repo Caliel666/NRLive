@@ -95,61 +95,7 @@ jobs:
             if (-not (Test-Path (Join-Path $xessRoot $relative))) { throw "XeSS SDK header missing: $relative" }
           }
           "XESS_SDK_ROOT=$xessRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-          # The same official SDK archive includes the x64 XeSS-FG and XeLL
-          # runtime DLLs. Stage them separately; CMake consumes only the headers.
-          function Get-PeMachine([string]$Path) {
-            $stream = [System.IO.File]::OpenRead($Path)
-            try {
-              $reader = [System.IO.BinaryReader]::new($stream)
-              if ($reader.ReadUInt16() -ne 0x5A4D) { throw "Invalid PE image: $Path" }
-              $stream.Position = 0x3c
-              $peOffset = $reader.ReadInt32()
-              if ($peOffset -lt 64 -or $peOffset -gt ($stream.Length - 6)) { throw "Invalid PE header offset: $Path" }
-              $stream.Position = $peOffset
-              if ($reader.ReadUInt32() -ne 0x00004550) { throw "Invalid PE signature: $Path" }
-              return $reader.ReadUInt16()
-            } finally {
-              $stream.Dispose()
-            }
-          }
-
-          $xessRuntime = Join-Path $env:RUNNER_TEMP "xess-runtime"
-          New-Item -ItemType Directory -Force $xessRuntime | Out-Null
-          foreach ($dllName in @("libxess_fg.dll", "libxell.dll")) {
-            $candidates = @(Get-ChildItem -Path $root -Recurse -File -Filter $dllName)
-            $found = $null
-            foreach ($candidate in $candidates) {
-              if ((Get-PeMachine $candidate.FullName) -eq 0x8664) {
-                $found = $candidate
-                break
-              }
-            }
-            if (-not $found) { throw "Official XeSS SDK 3.0.2 x64 runtime DLL missing: $dllName" }
-            Copy-Item -LiteralPath $found.FullName -Destination (Join-Path $xessRuntime $dllName) -Force
-            Write-Host "$dllName => $($found.FullName)"
-          }
-
-          # MFG Unlocker supplies the validated resource payload used by NRLive's
-          # native compatibility port. The DLL is loaded resource-only by NRLive.
-          $unlockerUrl = "https://github.com/dashdogy/MFG-Unlocker/releases/download/v1.7.0/MFGUnlocker-v1.7.0.zip"
-          $unlockerSha256 = "5bd19d03288e1ece1d0bb2030ac072b36758045028da192044dcaad73fd901dd"
-          $unlockerZip = Join-Path $env:RUNNER_TEMP "mfg-unlocker-v1.7.0.zip"
-          $unlockerRoot = Join-Path $env:RUNNER_TEMP "mfg-unlocker-v1.7.0"
-          curl.exe -L --fail --retry 5 --retry-delay 3 --output $unlockerZip $unlockerUrl
-          $actualUnlockerSha256 = (Get-FileHash -LiteralPath $unlockerZip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualUnlockerSha256 -ne $unlockerSha256) {
-            throw "MFG Unlocker v1.7.0 archive SHA-256 mismatch: $actualUnlockerSha256"
-          }
-          New-Item -ItemType Directory -Force $unlockerRoot | Out-Null
-          Expand-Archive -LiteralPath $unlockerZip -DestinationPath $unlockerRoot -Force
-          $unlockerDll = Get-ChildItem -Path $unlockerRoot -Recurse -File -Filter "MFGUnlocker.dll" | Select-Object -First 1
-          if (-not $unlockerDll) { throw "MFG Unlocker v1.7.0 archive does not contain MFGUnlocker.dll." }
-          if ((Get-PeMachine $unlockerDll.FullName) -ne 0x8664) { throw "MFGUnlocker.dll is not x64." }
-          Copy-Item -LiteralPath $unlockerDll.FullName -Destination (Join-Path $xessRuntime "MFGUnlocker.dll") -Force
-          Write-Host "MFGUnlocker.dll => $($unlockerDll.FullName)"
-          "XESS_RUNTIME_DIR=$xessRuntime" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "XeSS runtime folder: $xessRuntime"
+          Write-Host "XeSS SDK headers only: $xessRoot"
 
       - name: Download OpenNR DLSSNR runtime from Hugging Face (pinned SHA-256, no model weights)
         shell: pwsh
@@ -171,21 +117,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           cmake --build build --config Release --parallel
 
-      - name: Stage XeSS MFG runtime DLLs
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $destination = "build/Release/xess"
-          New-Item -ItemType Directory -Force $destination | Out-Null
-          foreach ($dllName in @("libxess_fg.dll", "libxell.dll", "MFGUnlocker.dll")) {
-            $source = Join-Path $env:XESS_RUNTIME_DIR $dllName
-            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-              throw "Downloaded XeSS runtime DLL is missing: $source"
-            }
-            Copy-Item -LiteralPath $source -Destination (Join-Path $destination $dllName) -Force
-            Write-Host "$dllName => $destination"
-          }
-
       - name: Run tests
         shell: pwsh
         run: |
@@ -198,9 +129,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           foreach ($file in @(
             "NRLive.exe",
-            "xess/libxess_fg.dll",
-            "xess/libxell.dll",
-            "xess/MFGUnlocker.dll",
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
             "amd_fidelityfx_upscaler_dx12.dll",
@@ -221,7 +149,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force $package | Out-Null
 
-          # Package the native NRLive executable and its staged runtime files.
+          # Package NRLive and its existing redistributable dependencies. XeSS runtime files remain user-supplied.
           Copy-Item "build/Release/*" $package -Recurse -Force
 
           # Test binaries are needed by CTest in build/Release, but must never ship.
