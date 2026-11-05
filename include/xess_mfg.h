@@ -36,5 +36,6 @@ private:
     uint32_t m_multiplier = 2;
     bool m_active = false;
     bool m_failed = false;
+    bool m_xellFailed = false;
     std::wstring m_error;
 };
