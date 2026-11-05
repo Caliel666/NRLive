@@ -43,6 +43,7 @@ struct Shared {
   double latSum = 0; int latN = 0;
   double gpuSum[4]{}; int gpuN[4]{};
   bool fsr = false, nr = false, fg = false;
+  uint32_t fgMultiplier = 2;
   NrBuild nrBuild;
   ::Size cap{}, out{};
   float ring[kRing]{};
@@ -62,6 +63,7 @@ struct View {
   float outFps = 0, srcFps = 0, genFps = 0, ftMs = 0, low1 = 0, low01 = 0;
   float lat = -1, gpu[4]{ -1, -1, -1, -1 };
   bool fsr = false, nr = false, fg = false;
+  uint32_t fgMultiplier = 2;
   NrBuild nrBuild;
   ::Size cap{}, out{};
   SysSnapshot sys;
@@ -571,6 +573,7 @@ void threadMain(HANDLE ready) {
         view.lat = g_s.latN ? (float)(g_s.latSum / g_s.latN) : -1;
         for (int i = 0; i < 4; ++i) view.gpu[i] = g_s.gpuN[i] ? (float)(g_s.gpuSum[i] / g_s.gpuN[i]) : -1;
         view.fsr = g_s.fsr; view.nr = g_s.nr; view.fg = g_s.fg;
+        view.fgMultiplier = g_s.fgMultiplier;
         view.cap = g_s.cap; view.out = g_s.out;
         g_s.sumMs = 0; g_s.frames = 0; g_s.latSum = 0; g_s.latN = 0;
         for (int i = 0; i < 4; ++i) { g_s.gpuSum[i] = 0; g_s.gpuN[i] = 0; }
@@ -602,8 +605,10 @@ void threadMain(HANDLE ready) {
     } else {
       if (refresh) {
         view.fg = view.fg && view.srcFps > 0;
-        view.outFps = view.srcFps * (view.fg ? 2.0f : 1.0f);
-        view.genFps = view.fg ? view.srcFps : 0;
+        const float multiplier = view.fg
+            ? static_cast<float>(std::clamp(view.fgMultiplier, 2u, 6u)) : 1.0f;
+        view.outFps = view.srcFps * multiplier;
+        view.genFps = view.srcFps * (multiplier - 1.0f);
         if (cfg.lows) {
           view.low1 = percentileLowFps(lowsBuf, 0.01f);
           view.low01 = percentileLowFps(lowsBuf, 0.001f);
@@ -716,6 +721,7 @@ void hudPushFrame(const HudFrame& f) {
   if (f.latencyMs >= 0 && f.latencyMs < 1000) { g_s.latSum += f.latencyMs; g_s.latN++; }
   const float gpu[4] = { f.gpuMotionMs, f.gpuNrMs, f.gpuFsrMs, f.gpuTotalMs };
   for (int i = 0; i < 4; ++i) if (gpu[i] >= 0) { g_s.gpuSum[i] += gpu[i]; g_s.gpuN[i]++; }
-  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg; g_s.nrBuild = f.nrBuild;
+  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg;
+  g_s.fgMultiplier = std::clamp(f.fgMultiplier, 1u, 6u); g_s.nrBuild = f.nrBuild;
   g_s.cap = f.capture; g_s.out = f.output;
 }
