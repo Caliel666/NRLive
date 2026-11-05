@@ -37,6 +37,7 @@ Open Settings → General → Frame Generation:
 
 - **Backend**: FSR Frame Generation or XeSS MFG (AMD).
 - **XeSS output multiplier**: 2x through 6x.
+- Command-line override: `NRLive.exe --fg fsr` or `NRLive.exe --fg xemfg`. This takes precedence over the saved UI preference for that launch.
 - The backend choice is applied on the next NRLive launch, because only one provider may own the output swapchain at a time.
 - The FG button in NRLive's top bar enables/disables whichever provider is selected.
 
