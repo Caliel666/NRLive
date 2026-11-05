@@ -758,6 +758,11 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
             static_cast<xefg_swapchain_handle_t>(m_context), &status);
         if (statusResult == XEFG_SWAPCHAIN_RESULT_SUCCESS) {
             haveStatus = true;
+            // XeSS reports how many frames this source Present queued to its
+            // asynchronous presenter (real + interpolated). Preserve that
+            // count for NRLive's output-FPS estimate; the status may be 1
+            // during warmup or when interpolation is skipped.
+            m_framesPresented = std::clamp(status.framesPresented, 1u, 6u);
         } else {
             m_failed = true;
             m_active = false;
