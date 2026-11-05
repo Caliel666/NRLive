@@ -1105,6 +1105,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         hs.output = display;
         hs.fsr = usedFsr;
         hs.nr = nrOutputForFrame != nullptr;
+        hs.fgMultiplier = xeMfgSelected ? xeMfg.framesPresented() : 2u;
         // NRLive's own share of the latency: frame acquired -> handed to present.
         hs.latencyMs = (float)((renderEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart));
         const auto& gt = gpuTimer.latest();
