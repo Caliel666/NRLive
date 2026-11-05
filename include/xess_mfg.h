@@ -5,8 +5,11 @@
 #include <memory>
 #include <string>
 
+struct XeMfgPatches;
+
 class XeMfgFrameGeneration {
 public:
+    ~XeMfgFrameGeneration();
     bool init(ID3D12Device* device, Size display, IDXGISwapChain4* applicationSwapChain,
               ID3D12CommandQueue* queue, IDXGISwapChain4** wrappedSwapChain);
     bool prepare(ID3D12GraphicsCommandList* commandList, ID3D12Resource* depth,
@@ -22,6 +25,7 @@ public:
 private:
     struct Api;
     std::unique_ptr<Api> m_api;
+    std::unique_ptr<XeMfgPatches> m_patches;
     void* m_context = nullptr;
     void* m_xell = nullptr;
     ID3D12Device* m_device = nullptr;
