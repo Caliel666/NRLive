@@ -27,7 +27,7 @@ public:
     void shutdown() noexcept;
     bool ready() const noexcept { return m_context != nullptr; }
     bool failed() const noexcept { return m_failed; }
-    bool active() const noexcept { return m_active; }
+    uint32_t framesPresented() const noexcept { return m_framesPresented; }
     const std::wstring& lastError() const noexcept { return m_error; }
 
 private:
