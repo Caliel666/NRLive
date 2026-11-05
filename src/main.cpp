@@ -964,7 +964,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
-      gfx.present();
+      if (xeMfgSelected)
+        gfx.present();
+      else
+        fg.present(gfx); // lock spans proxy Present and its synchronous FG callback
       const bool xeMfgGenerated = xeMfgSelected && fgOk ? xeMfg.afterPresent() : false;
       overlaySetFgActive(runFgThisFrame && fgPrepared &&
                          (xeMfgSelected ? xeMfgGenerated : !fg.failed()));
