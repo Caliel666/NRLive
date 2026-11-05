@@ -42,7 +42,7 @@ static std::string escape(const std::string& value)
     return out;
 }
 
-static void logEvent(const char* stage, const std::string& fields = {})
+static void logEvent(const char* stage, const std::string& fields)
 {
     std::string line = "[NRLive XeMFG] ";
     line += stage ? stage : "event";
