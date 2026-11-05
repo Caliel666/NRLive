@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -350,10 +351,17 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         if (llResult != XELL_RESULT_SUCCESS)
             throw std::runtime_error("xell_set_logging_" + std::to_string(static_cast<int>(llResult)));
         xell_sleep_params_t sleep{};
-        sleep.bLowLatencyMode = 1;
+        // Keep XeLL connected to XeFG and continue its per-frame Sleep/marker
+        // protocol, but do not enable its CPU-side low-latency render-queue
+        // throttling for the unlocked 3x-6x MFG path. That scheduler is tuned
+        // around conventional FG pacing and was holding back source-frame
+        // throughput as interpolation work increased.
+        sleep.bLowLatencyMode = 0;
+        sleep.minimumIntervalUs = 0;
         llResult = m_api->setSleepMode(xellContext, &sleep);
         if (llResult != XELL_RESULT_SUCCESS)
             throw std::runtime_error("xell_set_sleep_mode_" + std::to_string(static_cast<int>(llResult)));
+        logEvent("xell_sleep_mode", "\"low_latency\":0,\"minimum_interval_us\":0");
 
         fgResult = m_api->setLatencyReduction(fgContext, xellContext);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
@@ -647,7 +655,25 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
             // Sleep begins the NEXT frame. Avoid a synchronous disk flush on
             // every source frame; errors are logged below, status is sampled
             // at a low rate above.
+            const auto sleepStarted = std::chrono::steady_clock::now();
             const xell_result_t slept = m_api->sleep(xell, next);
+            const double sleepMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - sleepStarted).count();
+            static uint32_t sleepSamples = 0;
+            static double sleepTotalMs = 0.0;
+            static double sleepMaxMs = 0.0;
+            ++sleepSamples;
+            sleepTotalMs += sleepMs;
+            sleepMaxMs = std::max(sleepMaxMs, sleepMs);
+            if (sleepSamples >= 120) {
+                logEvent("xell_sleep_timing",
+                    "\"samples\":" + std::to_string(sleepSamples) +
+                    ",\"avg_ms\":" + std::to_string(sleepTotalMs / sleepSamples) +
+                    ",\"max_ms\":" + std::to_string(sleepMaxMs));
+                sleepSamples = 0;
+                sleepTotalMs = 0.0;
+                sleepMaxMs = 0.0;
+            }
             if (slept != XELL_RESULT_SUCCESS) {
                 m_xellFailed = true;
                 m_failed = true;
