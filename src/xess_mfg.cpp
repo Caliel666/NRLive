@@ -753,6 +753,7 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
 
     xefg_swapchain_present_status_t status{};
     bool haveStatus = false;
+    m_framesPresented = 1;
     if (!m_failed) {
         const auto statusResult = m_api->getLastPresentStatus(
             static_cast<xefg_swapchain_handle_t>(m_context), &status);
@@ -905,4 +906,5 @@ void XeMfgFrameGeneration::shutdown() noexcept
     m_failed = false;
     m_xellFailed = false;
     m_frameId = 0;
+    m_framesPresented = 1;
 }
