@@ -69,6 +69,7 @@ void overlaySetFgBackend(int backend); // non-persisting command-line override
 int overlayXeMfgMultiplier();       // 2x..6x output multiplier
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
+void overlaySetFgEnabledTransient(bool enabled); // command-line per-launch override; does not save INI
 void overlaySetFgActive(bool active);
 const OverlayHudConfig& overlayConfig();
 // The NR tab edits OpenNR's [OpenNR] settings in place when that runtime runs,
