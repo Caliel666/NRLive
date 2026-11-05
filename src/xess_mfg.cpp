@@ -1,12 +1,5 @@
 #include "xess_mfg.h"
 
-#include "host_unlock.h"
-#include "model_port.h"
-#include "runtime_layout.h"
-#include "runtime_payload.h"
-#include "sha256_util.h"
-#include "shader_port.h"
-
 #include <Windows.h>
 #include <bcrypt.h>
 #include <xefg_swapchain_d3d12.h>
@@ -23,6 +16,16 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+static std::string escape(const std::string& value);
+static void logEvent(const char* stage, const std::string& fields = {});
+
+#include "runtime_payload.h"
+#include "sha256_util.h"
+#include "runtime_layout.h"
+#include "host_unlock.h"
+#include "model_port.h"
+#include "shader_port.h"
 
 using Microsoft::WRL::ComPtr;
 
