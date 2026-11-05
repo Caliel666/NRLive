@@ -314,7 +314,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
     // Exactly one provider owns NRLive's output swapchain for this session.
     // Backend changes are saved by the overlay and applied on the next launch.
-    const bool xeMfgSelected = overlayFgBackend() == 1;
+    const bool xeMfgSelected = spec.frameGenerationBackendExplicit
+        ? spec.frameGenerationBackend == FrameGenerationBackend::XeMfg
+        : overlayFgBackend() == 1;
+    if (spec.frameGenerationBackendExplicit)
+      overlaySetFgBackend(xeMfgSelected ? 1 : 0);
     FsrFrameGeneration fg;
     XeMfgFrameGeneration xeMfg;
     bool fgOk = false;
