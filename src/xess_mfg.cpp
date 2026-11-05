@@ -423,27 +423,27 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
     }
 
     bool fgCallOk = !m_failed;
-    auto failFg = [&](const wchar_t* operation, int result) {
+    auto failFg = [&](const char* operation, const wchar_t* label, int result) {
         m_failed = true;
         m_active = false;
         fgCallOk = false;
-        m_error = std::wstring(L"XeSS MFG: ") + operation + L" failed (" +
+        m_error = std::wstring(L"XeSS MFG: ") + label + L" failed (" +
                   std::to_wstring(result) + L")";
         logEvent("fg_call_failed",
-            "\"operation\":\"" + escape(std::string(operation, operation + wcslen(operation))) +
-            "\",\"result\":" + std::to_string(result) +
-            ",\"present_id\":" + std::to_string(id));
+            "\\"operation\\":\\"" + std::string(operation) +
+            "\\",\\"result\\":" + std::to_string(result) +
+            ",\\"present_id\\":" + std::to_string(id));
     };
 
     if (fgCallOk) {
         const auto result = m_api->setEnabled(fg, enabled ? 1u : 0u);
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            failFg(L"enable/disable", static_cast<int>(result));
+            failFg("enable_disable", L"enable/disable", static_cast<int>(result));
     }
     if (fgCallOk && multiplier != m_multiplier) {
         const auto result = m_api->setFrameCount(fg, multiplier - 1);
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            failFg(L"multiplier change", static_cast<int>(result));
+            failFg("multiplier_change", L"multiplier change", static_cast<int>(result));
         else
             m_multiplier = multiplier;
     }
@@ -464,7 +464,7 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
         if (result == XEFG_SWAPCHAIN_RESULT_SUCCESS)
             result = tag(XEFG_SWAPCHAIN_RES_MOTION_VECTOR, motionVectors);
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-            failFg(L"input resource tagging", static_cast<int>(result));
+            failFg("input_resource_tagging", L"input resource tagging", static_cast<int>(result));
         } else {
             xefg_swapchain_frame_constant_data_t constants{};
             const float identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -479,14 +479,14 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
             constants.frameRenderTime = std::clamp(frameTimeMs, 0.1f, 1000.0f);
             result = m_api->tagConstants(fg, id, &constants);
             if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-                failFg(L"frame constants", static_cast<int>(result));
+                failFg("frame_constants", L"frame constants", static_cast<int>(result));
         }
     }
 
     if (fgCallOk) {
         const auto result = m_api->setPresentId(fg, id);
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            failFg(L"present ID", static_cast<int>(result));
+            failFg("present_id", L"present ID", static_cast<int>(result));
     }
 
     // XeLL markers are frame bookkeeping, not conditional on interpolation.
