@@ -336,7 +336,7 @@ HWND resolveFrontWindow()
 std::wstring targetUsage()
 {
     return
-        L"NRLive - capture and upscale a window with FSR 3\n\n"
+        L"NRLive - capture, upscale and generate frames\n\n"
         L"  NRLive.exe                    picker, hidden launcher countdown\n"
         L"  NRLive.exe -pid <id>          capture the window owned by PID\n"
         L"  NRLive.exe -pname <regex>     capture a process whose name matches regex\n"
