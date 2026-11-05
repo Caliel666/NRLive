@@ -347,6 +347,7 @@ std::wstring targetUsage()
         L"  NRLive.exe --key ctrl+shift+a set the global stop hotkey\n"
         L"  NRLive.exe --mv amdof|fast    select motion-vector implementation (default: fast)\n"
         L"  NRLive.exe --upscaler fsr4|fsr31|none\n"
+        L"  NRLive.exe --fg fsr|xemfg       select FSR FG or native XeSS MFG\n"
         L"                                  upscaler after capture and DLSSNR (default: fsr4;\n"
         L"                                  none stretches the frame to the output)\n"
         L"  NRLive.exe --bindbypass home,insert,end,pageup,pagedown\n"
@@ -459,6 +460,18 @@ bool parseTargetArgs(int argc, wchar_t** argv, TargetSpec& spec, std::wstring& e
             const UpscalerInfo* u = findUpscaler(value);
             if (!u) { error = L"invalid upscaler: " + value + L" (valid: " + upscalerIds() + L")"; return false; }
             spec.upscaler = u->kind;
+        } else if (opt == L"--fg" || opt == L"-fg") {
+            if (!need(value)) return false;
+            const std::wstring backend = lower(value);
+            if (backend == L"fsr") {
+                spec.frameGenerationBackend = FrameGenerationBackend::Fsr;
+            } else if (backend == L"xemfg") {
+                spec.frameGenerationBackend = FrameGenerationBackend::XeMfg;
+            } else {
+                error = L"invalid frame generation backend: " + value + L" (valid: fsr, xemfg)";
+                return false;
+            }
+            spec.frameGenerationBackendExplicit = true;
         } else if (opt == L"--trace" || opt == L"-trace") {
             if (!need(value)) return false;
             spec.tracePath = value;
