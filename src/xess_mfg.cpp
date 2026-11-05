@@ -518,7 +518,7 @@ void XeMfgFrameGeneration::markSimulationEndAndRenderSubmitStart() noexcept
             logEvent("xell_marker_failed",
                 std::string("\"marker\":\"") + name + "\",\"result\":" +
                 std::to_string(static_cast<int>(result)) +
-                ",\\"present_id\\":" + std::to_string(m_frameId));
+                ",\"present_id\":" + std::to_string(m_frameId));
             return;
         }
     }
@@ -543,7 +543,7 @@ void XeMfgFrameGeneration::markSubmittedAndPresentStart() noexcept
             logEvent("xell_marker_failed",
                 std::string("\"marker\":\"") + name + "\",\"result\":" +
                 std::to_string(static_cast<int>(result)) +
-                ",\\"present_id\\":" + std::to_string(m_frameId));
+                ",\"present_id\":" + std::to_string(m_frameId));
             return;
         }
     }
