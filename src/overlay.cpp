@@ -877,10 +877,6 @@ void overlaySetFgEnabled(bool enabled) {
   saveCfg();
   if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
 }
-void overlaySetFgEnabledTransient(bool enabled) {
-  g_fgEnabled = enabled;
-  if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
-}
 void overlaySetFgActive(bool active) {
   g_fgActive = active;
 }
