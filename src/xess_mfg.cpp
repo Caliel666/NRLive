@@ -466,7 +466,7 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
         return false;
     }
     m_active = enabled;
-    if (xell) {
+    if (xell && enabled) {
         m_api->addMarker(xell, id, XELL_SIMULATION_END);
         m_api->addMarker(xell, id, XELL_RENDERSUBMIT_START);
         m_api->addMarker(xell, id, XELL_RENDERSUBMIT_END);
@@ -499,16 +499,51 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
     m_active = status.isFrameGenEnabled != 0 &&
                status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS &&
                status.framesPresented > 1;
-    logEvent("present_status",
-        "\"enabled\":" + std::to_string(status.isFrameGenEnabled) +
-        ",\"frames_presented\":" + std::to_string(status.framesPresented) +
-        ",\"frame_gen_result\":" + std::to_string(static_cast<int>(status.frameGenResult)));
 
-    auto xell = static_cast<xell_context_handle_t>(m_xell);
+    // Avoid a flush-to-disk line every display frame. Record state changes and
+    // a low-rate heartbeat, while preserving the exact status fields.
+    static uint64_t statusFrame = 0;
+    static uint32_t lastEnabled = UINT32_MAX;
+    static uint32_t lastResult = UINT32_MAX;
+    static uint32_t lastPresented = UINT32_MAX;
+    ++statusFrame;
+    if (status.isFrameGenEnabled != lastEnabled ||
+        static_cast<uint32_t>(status.frameGenResult) != lastResult ||
+        status.framesPresented != lastPresented || (statusFrame % 120) == 0) {
+        logEvent("present_status",
+            "\"enabled\":" + std::to_string(status.isFrameGenEnabled) +
+            ",\"frames_presented\":" + std::to_string(status.framesPresented) +
+            ",\"frame_gen_result\":" + std::to_string(static_cast<int>(status.frameGenResult)) +
+            ",\"present_id\":" + std::to_string(m_frameId));
+        lastEnabled = status.isFrameGenEnabled;
+        lastResult = static_cast<uint32_t>(status.frameGenResult);
+        lastPresented = status.framesPresented;
+    }
+
     const uint32_t presented = m_frameId;
     const uint32_t next = presented + 1;
+    m_frameId = next ? next : 1;
+
+    // The runtime still returns one source frame when MFG is disabled. Do not
+    // call XeLL's present markers or sleep scheduler in that mode; XeLL pacing
+    // is only valid for an enabled FG present. This was previously called even
+    // when status.isFrameGenEnabled == 0.
+    if (!status.isFrameGenEnabled) {
+        m_active = false;
+        return false;
+    }
+    if (status.frameGenResult != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
+        m_active = false;
+        logEvent("present_generation_result",
+            "\"result\":" + std::to_string(static_cast<int>(status.frameGenResult)) +
+            ",\"present_id\":" + std::to_string(presented));
+        return false;
+    }
+
+    auto xell = static_cast<xell_context_handle_t>(m_xell);
     m_api->addMarker(xell, presented, XELL_PRESENT_END);
-    const xell_result_t slept = m_api->sleep(xell, next);
+    logEvent("xell_sleep_begin", "\"next_present_id\":" + std::to_string(m_frameId));
+    const xell_result_t slept = m_api->sleep(xell, m_frameId);
     if (slept != XELL_RESULT_SUCCESS) {
         m_failed = true;
         m_active = false;
@@ -517,7 +552,6 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
         logEvent("xell_sleep_failed", "\"result\":" + std::to_string(static_cast<int>(slept)));
         return false;
     }
-    m_frameId = next ? next : 1;
     m_api->addMarker(xell, m_frameId, XELL_SIMULATION_START);
     return m_active;
 }
