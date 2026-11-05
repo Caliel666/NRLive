@@ -1,6 +1,6 @@
 # XeSS Multi Frame Generation integration research
 
-Status: research / architecture checkpoint for `feature/xess-mfg-amd`. This document does not claim that XeMFG is implemented yet.
+Status: native D3D12 backend implementation is wired on `feature/xess-mfg-amd`; AMD hardware runtime validation is still pending. See `docs/XESS-MFG-SETUP.md` for user-supplied runtime setup.
 
 ## Goal
 
@@ -9,7 +9,7 @@ Add a Frame Generation backend selector to NRLive:
 - **FSR FG**: keep the existing AMD FidelityFX implementation and swapchain path unchanged.
 - **XeSS MFG (XeMFG)**: a separate D3D12 backend that can run on AMD GPUs, with an independently controlled multiplier (2x–6x / dynamic where supported).
 
-The selected backend must be exclusive. NRLive must never initialize or present through both frame-generation swapchain owners at once.
+The selected backend is exclusive at startup. NRLive initializes and presents through only one frame-generation swapchain owner per session.
 
 ## What the references establish
 
@@ -25,7 +25,7 @@ The selected backend must be exclusive. NRLive must never initialize or present 
 
 Relevant upstream source: https://github.com/dashdogy/MFG-Unlocker/tree/main/source/native/xess
 
-Important licensing boundary: MFG Unlocker's project code is MIT, but its notice explicitly says some embedded DXIL/SPIR-V program data is derived from Intel XeSS SDK programs and remains subject to Intel's XeSS SDK license. Do not copy generated program payloads, binaries, or model data into NRLive without checking the applicable Intel terms and preserving the required notices.
+Important licensing boundary: MFG Unlocker's project code is MIT, but its notice explicitly says some embedded DXIL/SPIR-V program data is derived from Intel XeSS SDK programs and remains subject to Intel's XeSS SDK license. NRLive uses the release DLL only as a resource-only module to read hash-checked payloads at runtime; the DLL and payload are not included in NRLive builds or release packages. The required notices are packaged with NRLive.
 
 ### dlssg-to-xefg-xmx
 
@@ -43,9 +43,9 @@ This is a large OptiScaler fork (GPL-3.0) and a useful reference for how XeFG is
 
 NRLive is not currently a game-side proxy. It captures a game's image, generates motion vectors/depth in its own D3D12 device, and presents through an NRLive-owned swapchain. The existing FSR FG implementation wraps that output swapchain and calls the FFX generation callback from the presentation path.
 
-MFG Unlocker's standalone host instead intercepts and takes over the **game's** swapchain, while observing the game's own resource tags / upscaler evaluations. Copying its host verbatim would target the wrong swapchain and wrong resource lifetime for NRLive.
+The upstream standalone host demonstrates the XeFG/XeLL call sequence. NRLive uses a separate native host around its own output swapchain and its own motion-vector/depth resources; no game-side hook or instrumentation is used.
 
-A native NRLive XeMFG backend therefore needs to adapt the D3D12 host around NRLive's resources:
+The native NRLive XeMFG host is adapted around NRLive's resources:
 
 1. Create an XeFG context for NRLive's D3D12 device and output swapchain.
 2. Load and validate a compatible XeSS FG / XeLL runtime pair from a user-provided runtime directory. Do not silently mix incompatible DLL versions.
@@ -65,6 +65,6 @@ A native NRLive XeMFG backend therefore needs to adapt the D3D12 host around NRL
 - Do not advertise XeMFG as active until an actual generated frame has been successfully presented.
 - The first native implementation target is D3D12 / Windows. Vulkan can be a later phase.
 
-## Suggested first milestone
+## Implemented first milestone
 
-Port the smallest necessary D3D12 XeFG + XeLL host surface from the MFG Unlocker design into a new NRLive backend, adapting resource tags to NRLive's own depth/MV/color resources. Before writing the full host, verify the Intel runtime API/version and licensing requirements for the non-Intel multi-frame program data. The XMX fork should remain reference-only for AMD.
+The branch now includes a D3D12 XeFG/XeLL host, AMD runtime-layout validation, the MFG model/shader compatibility port, input resource tagging, frame constants, present IDs, a 2x–6x selector, backend-exclusive swapchain ownership, and failure fallback to ordinary NRLive presentation. The build uses XeSS SDK 3.0.2 public headers; the end-user runtime DLLs and MFG Unlocker resource pack are supplied separately. The XMX fork remains reference-only for AMD. Actual generated-frame output still needs validation on an AMD GPU.
