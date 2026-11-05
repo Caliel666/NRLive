@@ -60,17 +60,20 @@ static LONG WINAPI logUnhandledException(EXCEPTION_POINTERS* info)
         int length = snprintf(line, sizeof(line),
             "Unhandled native exception: code=0x%08lX address=%p",
             static_cast<unsigned long>(code), address);
-        if (info && info->ExceptionRecord &&
+        if (length > 0 && static_cast<size_t>(length) < sizeof(line) &&
+            info && info->ExceptionRecord &&
             code == EXCEPTION_ACCESS_VIOLATION &&
             info->ExceptionRecord->NumberParameters >= 2) {
-          length += snprintf(line + length, sizeof(line) - static_cast<size_t>(length),
+          const size_t remaining = sizeof(line) - static_cast<size_t>(length);
+          const int extra = snprintf(line + length, remaining,
               " operation=%llu target=0x%llX",
               static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[0]),
               static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]));
+          if (extra > 0 && static_cast<size_t>(extra) < remaining) length += extra;
         }
-        if (length > 0 && static_cast<size_t>(length) < sizeof(line)) {
-          line[length++] = '\\r';
-          line[length++] = '\\n';
+        if (length > 0 && static_cast<size_t>(length) + 2 < sizeof(line)) {
+          line[length++] = '\r';
+          line[length++] = '\n';
           DWORD written = 0;
           WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
           FlushFileBuffers(file);
