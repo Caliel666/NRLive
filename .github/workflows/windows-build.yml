@@ -73,7 +73,7 @@ jobs:
           Write-Host "FSR SDK root: $($sdk.FullName)"
           Write-Host "FSR runtime folder: $binRoot"
 
-      - name: Download Intel XeSS SDK 3.0.2 public headers
+      - name: Download Intel XeSS SDK 3.0.2 headers and x64 runtimes
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -96,8 +96,8 @@ jobs:
           }
           "XESS_SDK_ROOT=$xessRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-          # Stage x64 runtime inputs in the executable's expected xess/ folder
-          # for CI path validation. They are removed before the public ZIP is built.
+          # Collect the unmodified x64 runtime DLLs for the final NRLive package.
+          # The archive SHA-256 checks above pin the exact upstream inputs.
           function Get-PeMachine([string]$Path) {
             $stream = [System.IO.File]::OpenRead($Path)
             try {
@@ -198,26 +198,15 @@ jobs:
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
             "amd_fidelityfx_upscaler_dx12.dll",
+            "xess/libxess_fg.dll",
+            "xess/libxell.dll",
+            "xess/MFGUnlocker.dll",
             "opennr/MochizukiNrRuntime.dll",
             "opennr/dlssnr-amd/shaders",
             "opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt"
           )) {
             if (-not (Test-Path "build/Release/$file")) { throw "$file was not staged in build/Release." }
           }
-
-      - name: Exclude separately licensed XeSS runtime inputs from public package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $runtimeDirectory = "build/Release/xess"
-          if (-not (Test-Path -LiteralPath $runtimeDirectory -PathType Container)) {
-            throw "Expected temporary XeSS runtime staging directory is missing."
-          }
-          Remove-Item -LiteralPath $runtimeDirectory -Recurse -Force
-          if (Test-Path -LiteralPath $runtimeDirectory) {
-            throw "XeSS runtime inputs must not be included in the public NRLive package."
-          }
-          Write-Host "XeSS runtime inputs validated, then excluded from the public artifact."
 
       - name: Assemble portable NRLive package
         shell: pwsh
@@ -229,7 +218,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force $package | Out-Null
 
-          # Package NRLive and its existing redistributable dependencies. XeSS runtime files remain user-supplied.
+          # Package NRLive with the pinned, unmodified XeSS MFG runtime DLLs in xess/.
           Copy-Item "build/Release/*" $package -Recurse -Force
 
           # Test binaries are needed by CTest in build/Release, but must never ship.
@@ -257,6 +246,9 @@ jobs:
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
             "amd_fidelityfx_upscaler_dx12.dll",
+            "xess/libxess_fg.dll",
+            "xess/libxell.dll",
+            "xess/MFGUnlocker.dll",
             "opennr/MochizukiNrRuntime.dll",
             "opennr/dlssnr-amd/shaders",
             "DLSSNR-AMD-LICENSE.txt",
