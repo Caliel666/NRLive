@@ -57,9 +57,23 @@ static LONG WINAPI logUnhandledException(EXCEPTION_POINTERS* info)
         char line[512]{};
         const DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
         const void* address = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr;
+        char faultModuleUtf8[512]{};
+        if (address) {
+          HMODULE faultModule = nullptr;
+          if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                 reinterpret_cast<LPCWSTR>(const_cast<void*>(address)),
+                                 &faultModule)) {
+            wchar_t modulePath[MAX_PATH]{};
+            if (GetModuleFileNameW(faultModule, modulePath, MAX_PATH))
+              WideCharToMultiByte(CP_UTF8, 0, modulePath, -1, faultModuleUtf8,
+                                  static_cast<int>(sizeof(faultModuleUtf8)), nullptr, nullptr);
+          }
+        }
         int length = snprintf(line, sizeof(line),
-            "Unhandled native exception: code=0x%08lX address=%p",
-            static_cast<unsigned long>(code), address);
+            "Unhandled native exception: code=0x%08lX address=%p module=%s",
+            static_cast<unsigned long>(code), address,
+            faultModuleUtf8[0] ? faultModuleUtf8 : "(unknown)");
         if (length > 0 && static_cast<size_t>(length) < sizeof(line) &&
             info && info->ExceptionRecord &&
             code == EXCEPTION_ACCESS_VIOLATION &&
@@ -434,8 +448,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         throw std::runtime_error("could not rebuild DXGI swapchain after frame-generation initialization failed");
       logMain(L"Ordinary swapchain rebuilt after frame-generation initialization failure");
     }
-    bool fgEnabled = fgOk && overlayFgEnabled();
-    overlaySetFgEnabled(fgEnabled);
+    // An explicit --fg selection means "run this frame-generation backend"
+    // for this launch. Keep this override transient; do not silently rewrite
+    // the user's saved overlay toggle.
+    bool fgEnabled = fgOk && (spec.frameGenerationBackendExplicit || overlayFgEnabled());
+    if (spec.frameGenerationBackendExplicit) {
+      overlaySetFgEnabledTransient(fgEnabled);
+      logMain(fgEnabled ? L"Frame generation enabled for this launch by explicit --fg selection"
+                        : L"Explicit --fg backend selected, but initialization failed");
+    } else {
+      overlaySetFgEnabled(fgEnabled);
+    }
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
       printCli(fgOk ? (xeMfgSelected ? xeMfg.lastError() : fg.lastError())
