@@ -73,6 +73,30 @@ jobs:
           Write-Host "FSR SDK root: $($sdk.FullName)"
           Write-Host "FSR runtime folder: $binRoot"
 
+      - name: Download Intel XeSS SDK 3.0.2 public headers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/intel/xess/releases/download/v3.0.2/XeSS_SDK_3.0.2.zip"
+          $expectedSha256 = "88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990"
+          $zip = Join-Path $env:RUNNER_TEMP "xess-sdk-3.0.2.zip"
+          $root = Join-Path $env:RUNNER_TEMP "xess-sdk-3.0.2"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          curl.exe -L --fail --retry 5 --retry-delay 3 --output $zip $url
+          $actualSha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "XeSS SDK 3.0.2 archive SHA-256 mismatch: $actualSha256"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          $header = Get-ChildItem -Path $root -Recurse -File -Filter "xefg_swapchain_d3d12.h" | Select-Object -First 1
+          if (-not $header) { throw "XeSS SDK D3D12 Frame Generation header missing." }
+          $xessRoot = Split-Path (Split-Path (Split-Path $header.FullName -Parent) -Parent) -Parent
+          foreach ($relative in @("inc/xess_fg/xefg_swapchain_d3d12.h", "inc/xell/xell_d3d12.h")) {
+            if (-not (Test-Path (Join-Path $xessRoot $relative))) { throw "XeSS SDK header missing: $relative" }
+          }
+          "XESS_SDK_ROOT=$xessRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "XeSS SDK headers: $xessRoot"
+
       - name: Download OpenNR DLSSNR runtime from Hugging Face (pinned SHA-256, no model weights)
         shell: pwsh
         run: |
@@ -85,7 +109,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
+          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DXESS_SDK_ROOT="$env:XESS_SDK_ROOT" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
@@ -143,6 +167,9 @@ jobs:
           Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
           Copy-Item "$package/opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt" "$package/DLSSNR-AMD-LICENSE.txt" -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
+          Copy-Item "docs/XESS-MFG-SETUP.md" "$package/XESS-MFG-SETUP.md" -Force
+          Copy-Item "third_party/xess_mfg/MFG-UNLOCKER-LICENSE.txt" "$package/MFG-UNLOCKER-LICENSE.txt" -Force
+          Copy-Item "third_party/xess_mfg/XEFG-PROGRAMS-NOTICE.txt" "$package/XEFG-PROGRAMS-NOTICE.txt" -Force
           Copy-Item "version.txt" "$package/version.txt" -Force
 
           foreach ($file in @(
