@@ -222,6 +222,7 @@ public:
     std::unique_ptr<ModelPort> model;
     std::unique_ptr<ShaderPort> shader;
     std::unique_ptr<xess_host_unlock::Unlock> unlock;
+    std::unique_ptr<xess_host_unlock::OutputRing> outputRing;
 
     void apply(HMODULE fg, HMODULE ll, HMODULE payload, UINT vendor)
     {
@@ -236,17 +237,36 @@ public:
         logEvent("host_unlock_begin");
         unlock = std::make_unique<xess_host_unlock::Unlock>(fg, ll, uint8_t(5), false);
         logEvent("host_unlock_ready");
+
+        // The stock output ring has one slot. That makes the next MFG batch
+        // wait for the previous batch to finish its paced presentations,
+        // leaving the GPU idle between real frames. Two slots let generation
+        // of batch N+1 overlap presentation of batch N. Apply before the
+        // XeFG swap chain is initialized so its output resources are allocated
+        // with the larger ring.
+        logEvent("output_ring_begin", "\"depth\":2");
+        outputRing = std::make_unique<xess_host_unlock::OutputRing>(fg, uint8_t(2));
+        logEvent("output_ring_ready",
+                 "\"depth\":2,\"rva\":" + std::to_string(outputRing->Rva()) +
+                 ",\"count_offset\":" + std::to_string(outputRing->CountOffset()));
     }
 
     void restore() noexcept
     {
-        try { shader.reset(); } catch (...) {}
-        try { model.reset(); } catch (...) {}
+        if (outputRing) {
+            try { outputRing->Restore(); }
+            catch (...) { logEvent("output_ring_restore_failed"); }
+            outputRing.reset();
+        }
         if (unlock) {
             try { unlock->Restore(); } catch (...) { logEvent("patch_restore_failed"); }
             unlock.reset();
         }
+        try { shader.reset(); } catch (...) {}
+        try { model.reset(); } catch (...) {}
     }
+
+    ~XeMfgPatches() { restore(); }
 };
 
 XeMfgFrameGeneration::XeMfgFrameGeneration() = default;
