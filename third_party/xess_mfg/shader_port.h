@@ -1,4 +1,4 @@
-#include "../runtime_payload.h"
+#include "runtime_payload.h"
 // Exact-build, process-local shader additions. Unknown keys use the provider's
 // original decoder and retain its native failure behavior; splat.1, unet.1: a decoded
 // program identical to one RTXMFG replaces is swapped for RTXMFG's own shader.
