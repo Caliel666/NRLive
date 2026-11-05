@@ -43,7 +43,7 @@ public:
   uint32_t index() const { return m_index; }
   Size display() const { return m_display; }
   Size renderSize() const { return m_render; }
-  bool present();
+  bool present(void (*afterSubmitBeforePresent)(void*) = nullptr, void* callbackContext = nullptr);
 
   // Drain the GPU: signal the frame fence and CPU-wait until the GPU has
   // finished everything queued up to this point.  Call this BEFORE tearing
