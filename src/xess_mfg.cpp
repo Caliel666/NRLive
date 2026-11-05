@@ -351,17 +351,15 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         if (llResult != XELL_RESULT_SUCCESS)
             throw std::runtime_error("xell_set_logging_" + std::to_string(static_cast<int>(llResult)));
         xell_sleep_params_t sleep{};
-        // Keep XeLL connected to XeFG and continue its per-frame Sleep/marker
-        // protocol, but do not enable its CPU-side low-latency render-queue
-        // throttling for the unlocked 3x-6x MFG path. That scheduler is tuned
-        // around conventional FG pacing and was holding back source-frame
-        // throughput as interpolation work increased.
-        sleep.bLowLatencyMode = 0;
+        // XeSS-FG requires XeLL latency reduction to be enabled, including
+        // on cross-vendor devices. Keep its pacing integration active; the
+        // per-frame sleep cost is measured separately to avoid guessing at it.
+        sleep.bLowLatencyMode = 1;
         sleep.minimumIntervalUs = 0;
         llResult = m_api->setSleepMode(xellContext, &sleep);
         if (llResult != XELL_RESULT_SUCCESS)
             throw std::runtime_error("xell_set_sleep_mode_" + std::to_string(static_cast<int>(llResult)));
-        logEvent("xell_sleep_mode", "\"low_latency\":0,\"minimum_interval_us\":0");
+        logEvent("xell_sleep_mode", "\"low_latency\":1,\"minimum_interval_us\":0");
 
         fgResult = m_api->setLatencyReduction(fgContext, xellContext);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
