@@ -443,6 +443,10 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
     }
     if (fgCallOk && multiplier != m_multiplier) {
         const auto result = m_api->setFrameCount(fg, multiplier - 1);
+        logEvent("multiplier_set",
+            "\"output_multiplier\":" + std::to_string(multiplier) +
+            ",\"interpolated_frames\":" + std::to_string(multiplier - 1) +
+            ",\"result\":" + std::to_string(static_cast<int>(result)));
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             failFg("multiplier_change", L"multiplier change", static_cast<int>(result));
         else
@@ -490,36 +494,59 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
             failFg("present_id", L"present ID", static_cast<int>(result));
     }
 
-    // XeLL markers are frame bookkeeping, not conditional on interpolation.
-    // They must be supplied on warm-up, warning, and FG-disabled frames too.
-    bool markerOk = true;
-    if (!m_xellFailed) {
-        const std::pair<xell_latency_marker_type_t, const char*> markers[] = {
-            {XELL_SIMULATION_END, "simulation_end"},
-            {XELL_RENDERSUBMIT_START, "rendersubmit_start"},
-            {XELL_RENDERSUBMIT_END, "rendersubmit_end"},
-            {XELL_PRESENT_START, "present_start"}
-        };
-        for (const auto& [marker, name] : markers) {
-            const auto result = m_api->addMarker(xell, id, marker);
-            if (result != XELL_RESULT_SUCCESS) {
-                markerOk = false;
-                m_xellFailed = true;
-                m_failed = true;
-                m_active = false;
-                m_error = L"XeSS MFG: XeLL marker failed (" +
-                          std::to_wstring(static_cast<int>(result)) + L")";
-                logEvent("xell_marker_failed",
-                    std::string("\"marker\":\"") + name + "\",\"result\":" +
-                    std::to_string(static_cast<int>(result)) +
-                    ",\"present_id\":" + std::to_string(id));
-                break;
-            }
+    m_active = fgCallOk && enabled && frameInputsValid;
+    return fgCallOk && frameInputsValid;
+}
+
+
+void XeMfgFrameGeneration::markSimulationEndAndRenderSubmitStart() noexcept
+{
+    if (!m_api || !m_xell || m_xellFailed) return;
+    auto xell = static_cast<xell_context_handle_t>(m_xell);
+    const std::pair<xell_latency_marker_type_t, const char*> markers[] = {
+        {XELL_SIMULATION_END, "simulation_end"},
+        {XELL_RENDERSUBMIT_START, "rendersubmit_start"}
+    };
+    for (const auto& [marker, name] : markers) {
+        const auto result = m_api->addMarker(xell, m_frameId, marker);
+        if (result != XELL_RESULT_SUCCESS) {
+            m_xellFailed = true;
+            m_failed = true;
+            m_active = false;
+            m_error = L"XeSS MFG: XeLL marker failed (" +
+                      std::to_wstring(static_cast<int>(result)) + L")";
+            logEvent("xell_marker_failed",
+                std::string("\\"marker\\":\\"") + name + "\\",\\"result\\":" +
+                std::to_string(static_cast<int>(result)) +
+                ",\\"present_id\\":" + std::to_string(m_frameId));
+            return;
         }
     }
+}
 
-    m_active = fgCallOk && enabled && frameInputsValid && markerOk;
-    return fgCallOk && frameInputsValid && markerOk;
+void XeMfgFrameGeneration::markSubmittedAndPresentStart() noexcept
+{
+    if (!m_api || !m_xell || m_xellFailed) return;
+    auto xell = static_cast<xell_context_handle_t>(m_xell);
+    const std::pair<xell_latency_marker_type_t, const char*> markers[] = {
+        {XELL_RENDERSUBMIT_END, "rendersubmit_end"},
+        {XELL_PRESENT_START, "present_start"}
+    };
+    for (const auto& [marker, name] : markers) {
+        const auto result = m_api->addMarker(xell, m_frameId, marker);
+        if (result != XELL_RESULT_SUCCESS) {
+            m_xellFailed = true;
+            m_failed = true;
+            m_active = false;
+            m_error = L"XeSS MFG: XeLL marker failed (" +
+                      std::to_wstring(static_cast<int>(result)) + L")";
+            logEvent("xell_marker_failed",
+                std::string("\\"marker\\":\\"") + name + "\\",\\"result\\":" +
+                std::to_string(static_cast<int>(result)) +
+                ",\\"present_id\\":" + std::to_string(m_frameId));
+            return;
+        }
+    }
 }
 
 bool XeMfgFrameGeneration::afterPresent() noexcept
@@ -565,6 +592,7 @@ bool XeMfgFrameGeneration::afterPresent() noexcept
         logEvent("present_status",
             "\"enabled\":" + std::to_string(status.isFrameGenEnabled) +
             ",\"frames_presented\":" + std::to_string(status.framesPresented) +
+            ",\"configured_multiplier\":" + std::to_string(m_multiplier) +
             ",\"frame_gen_result\":" + std::to_string(static_cast<int>(status.frameGenResult)) +
             ",\"present_id\":" + std::to_string(m_frameId));
         if (status.frameGenResult > XEFG_SWAPCHAIN_RESULT_SUCCESS) {
