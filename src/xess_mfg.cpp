@@ -165,28 +165,34 @@ struct XeMfgFrameGeneration::Api
         return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
     }
 
-    bool resolve()
+    bool resolve(std::string& missingExport)
     {
-#define RESOLVE_FG(name) name = symbol<decltype(name)>(fgModule, #name); if (!name) return false
-#define RESOLVE_LL(name) name = symbol<decltype(name)>(llModule, #name); if (!name) return false
-        RESOLVE_FG(createContext);
-        RESOLVE_FG(initFromSwapChain);
-        RESOLVE_FG(getSwapChain);
-        RESOLVE_FG(tagResource);
-        RESOLVE_FG(tagConstants);
-        RESOLVE_FG(setEnabled);
-        RESOLVE_FG(setFrameCount);
-        RESOLVE_FG(setPresentId);
-        RESOLVE_FG(getLastPresentStatus);
-        RESOLVE_FG(setLatencyReduction);
-        RESOLVE_FG(setLogging);
-        RESOLVE_FG(destroy);
-        RESOLVE_LL(createXell);
-        RESOLVE_LL(setSleepMode);
-        RESOLVE_LL(sleep);
-        RESOLVE_LL(addMarker);
-        RESOLVE_LL(setXellLogging);
-        RESOLVE_LL(destroyXell);
+        // These member names are local aliases. GetProcAddress must use the
+        // exact exported ABI names declared by Intel's XeSS 3.0.2 headers.
+#define RESOLVE_FG(member, exported) \
+        member = symbol<decltype(member)>(fgModule, exported); \
+        if (!member) { missingExport = std::string("libxess_fg.dll!") + exported; return false; }
+#define RESOLVE_LL(member, exported) \
+        member = symbol<decltype(member)>(llModule, exported); \
+        if (!member) { missingExport = std::string("libxell.dll!") + exported; return false; }
+        RESOLVE_FG(createContext, "xefgSwapChainD3D12CreateContext");
+        RESOLVE_FG(initFromSwapChain, "xefgSwapChainD3D12InitFromSwapChain");
+        RESOLVE_FG(getSwapChain, "xefgSwapChainD3D12GetSwapChainPtr");
+        RESOLVE_FG(tagResource, "xefgSwapChainD3D12TagFrameResource");
+        RESOLVE_FG(tagConstants, "xefgSwapChainTagFrameConstants");
+        RESOLVE_FG(setEnabled, "xefgSwapChainSetEnabled");
+        RESOLVE_FG(setFrameCount, "xefgSwapChainSetNumInterpolatedFrames");
+        RESOLVE_FG(setPresentId, "xefgSwapChainSetPresentId");
+        RESOLVE_FG(getLastPresentStatus, "xefgSwapChainGetLastPresentStatus");
+        RESOLVE_FG(setLatencyReduction, "xefgSwapChainSetLatencyReduction");
+        RESOLVE_FG(setLogging, "xefgSwapChainSetLoggingCallback");
+        RESOLVE_FG(destroy, "xefgSwapChainDestroy");
+        RESOLVE_LL(createXell, "xellD3D12CreateContext");
+        RESOLVE_LL(setSleepMode, "xellSetSleepMode");
+        RESOLVE_LL(sleep, "xellSleep");
+        RESOLVE_LL(addMarker, "xellAddMarkerData");
+        RESOLVE_LL(setXellLogging, "xellSetLoggingCallback");
+        RESOLVE_LL(destroyXell, "xellDestroyContext");
 #undef RESOLVE_FG
 #undef RESOLVE_LL
         return true;
@@ -261,7 +267,9 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         logEvent("runtime_hashes", "\"libxess_fg\":\"" + fgHash + "\",\"libxell\":\"" + llHash + "\"");
         if (!xess_layout::Pair(m_api->fgModule, m_api->llModule))
             throw std::runtime_error("runtime_instruction_layout_not_supported");
-        if (!m_api->resolve()) throw std::runtime_error("runtime_exports_missing");
+        std::string missingExport;
+        if (!m_api->resolve(missingExport))
+            throw std::runtime_error("runtime_export_missing:" + missingExport);
 
         const UINT vendor = adapterVendor(device);
         if (vendor != 0x1002) throw std::runtime_error("XeMFG_AMD_route_requires_vendor_1002");
