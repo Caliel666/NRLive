@@ -47,8 +47,24 @@ static void logEvent(const char* stage, const std::string& fields)
     std::string line = "[NRLive XeMFG] ";
     line += stage ? stage : "event";
     if (!fields.empty()) line += " " + fields;
-    line += "\n";
+    line += "\r\n";
     OutputDebugStringA(line.c_str());
+
+    // OutputDebugString is not normally persisted. Keep a flush-on-each-event
+    // file beside NRLive.exe so native loader crashes still leave a last stage.
+    wchar_t path[MAX_PATH]{};
+    const DWORD count = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (!count || count >= MAX_PATH) return;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) return;
+    wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"NRLive-xess.log");
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    FlushFileBuffers(file);
+    CloseHandle(file);
 }
 
 namespace {
@@ -208,11 +224,17 @@ public:
 
     void apply(HMODULE fg, HMODULE ll, HMODULE payload, UINT vendor)
     {
+        logEvent("model_port_begin");
         model = std::make_unique<ModelPort>(fg, true, true);
+        logEvent("model_port_ready");
+        logEvent("shader_port_begin");
         shader = std::make_unique<ShaderPort>(fg, payload, std::filesystem::path{}, vendor);
+        logEvent("shader_port_ready");
         // The AMD port uses the MFG model for every multiplier, including 2x.
         // Five interpolated frames unlock the API limit to 6x output.
+        logEvent("host_unlock_begin");
         unlock = std::make_unique<xess_host_unlock::Unlock>(fg, ll, uint8_t(5), false);
+        logEvent("host_unlock_ready");
     }
 
     void restore() noexcept
@@ -238,6 +260,7 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
                                 ID3D12CommandQueue* queue,
                                 IDXGISwapChain4** wrappedSwapChain)
 {
+    logEvent("init_begin");
     shutdown();
     if (!device || !applicationSwapChain || !queue || !wrappedSwapChain) {
         m_error = L"XeSS MFG: invalid D3D12 initialization arguments";
@@ -254,30 +277,40 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
             !std::filesystem::exists(payloadPath))
             throw std::runtime_error("runtime_files_missing (xess/libxess_fg.dll, xess/libxell.dll, xess/MFGUnlocker.dll)");
 
+        logEvent("runtime_files_found");
         m_api->llModule = LoadLibraryExW(llPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-        if (!m_api->llModule) throw std::runtime_error("libxell_load");
+        if (!m_api->llModule) throw std::runtime_error("libxell_load_win32_" + std::to_string(GetLastError()));
+        logEvent("libxell_loaded");
         m_api->fgModule = LoadLibraryExW(fgPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-        if (!m_api->fgModule) throw std::runtime_error("libxess_fg_load");
+        if (!m_api->fgModule) throw std::runtime_error("libxess_fg_load_win32_" + std::to_string(GetLastError()));
+        logEvent("libxess_fg_loaded");
         m_api->payloadModule = LoadLibraryExW(payloadPath.c_str(), nullptr,
             LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-        if (!m_api->payloadModule) throw std::runtime_error("MFGUnlocker_resource_load");
+        if (!m_api->payloadModule) throw std::runtime_error("MFGUnlocker_resource_load_win32_" + std::to_string(GetLastError()));
+        logEvent("MFGUnlocker_resource_loaded");
 
         const auto fgHash = hashFile(fgPath);
         const auto llHash = hashFile(llPath);
         logEvent("runtime_hashes", "\"libxess_fg\":\"" + fgHash + "\",\"libxell\":\"" + llHash + "\"");
+        logEvent("runtime_layout_validation_begin");
         if (!xess_layout::Pair(m_api->fgModule, m_api->llModule))
             throw std::runtime_error("runtime_instruction_layout_not_supported");
+        logEvent("runtime_layout_validation_ok");
         std::string missingExport;
         if (!m_api->resolve(missingExport))
             throw std::runtime_error("runtime_export_missing:" + missingExport);
+        logEvent("runtime_exports_resolved");
 
         const UINT vendor = adapterVendor(device);
         if (vendor != 0x1002) throw std::runtime_error("XeMFG_AMD_route_requires_vendor_1002");
+        logEvent("compatibility_patches_begin", "\"vendor_id\":" + std::to_string(vendor));
         auto patches = std::make_unique<XeMfgPatches>();
         patches->apply(m_api->fgModule, m_api->llModule, m_api->payloadModule, vendor);
         m_patches = std::move(patches);
+        logEvent("compatibility_patches_ready");
 
         xefg_swapchain_handle_t fgContext = nullptr;
+        logEvent("xefg_create_context_begin");
         xefg_swapchain_result_t fgResult = m_api->createContext(device, &fgContext);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS || !fgContext)
             throw std::runtime_error("xefg_create_context_" + std::to_string(static_cast<int>(fgResult)));
@@ -287,6 +320,7 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
             throw std::runtime_error("xefg_set_logging_" + std::to_string(static_cast<int>(fgResult)));
 
         xell_context_handle_t xellContext = nullptr;
+        logEvent("xell_create_context_begin");
         xell_result_t llResult = m_api->createXell(device, &xellContext);
         if (llResult != XELL_RESULT_SUCCESS || !xellContext)
             throw std::runtime_error("xell_create_context_" + std::to_string(static_cast<int>(llResult)));
@@ -311,11 +345,13 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         params.creationNodeMask = 1;
         params.visibleNodeMask = 1;
         params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;
+        logEvent("xefg_init_swapchain_begin");
         fgResult = m_api->initFromSwapChain(fgContext, queue, &params);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             throw std::runtime_error("xefg_init_swapchain_" + std::to_string(static_cast<int>(fgResult)));
 
         void* wrapped = nullptr;
+        logEvent("xefg_get_wrapped_swapchain_begin");
         fgResult = m_api->getSwapChain(fgContext, IID_IDXGISwapChain4, &wrapped);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS || !wrapped)
             throw std::runtime_error("xefg_get_swapchain_" + std::to_string(static_cast<int>(fgResult)));
