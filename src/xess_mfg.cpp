@@ -256,7 +256,7 @@ XeMfgFrameGeneration::~XeMfgFrameGeneration()
 }
 
 bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
-                                IDXGISwapChain4* applicationSwapChain,
+                                IDXGISwapChain4*& applicationSwapChain,
                                 ID3D12CommandQueue* queue,
                                 IDXGISwapChain4** wrappedSwapChain)
 {
@@ -346,9 +346,14 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         params.visibleNodeMask = 1;
         params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;
         logEvent("xefg_init_swapchain_begin");
+        // XeSS InitFromSwapChain consumes the caller's one owned swapchain
+        // reference on success. Clear the caller's pointer immediately after
+        // that successful transfer so it cannot Release an invalid COM object.
         fgResult = m_api->initFromSwapChain(fgContext, queue, &params);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             throw std::runtime_error("xefg_init_swapchain_" + std::to_string(static_cast<int>(fgResult)));
+        applicationSwapChain = nullptr;
+        logEvent("application_swapchain_ownership_transferred");
 
         void* wrapped = nullptr;
         logEvent("xefg_get_wrapped_swapchain_begin");
