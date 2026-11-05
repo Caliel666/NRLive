@@ -188,12 +188,12 @@ public:
         if (adapterVendor==0x1002) {
             std::erase_if(replacements,[&](const xess_payload::Replacement& r) {
                 if (r.name!="shaders/unet_aa016078.dxil" && r.name!="shaders/unet_efbe3788.dxil") return false;
-                kept+=(kept.empty() ? "\"" : ",\"")+r.name+"\"";
+                kept += std::string(kept.empty() ? "\"" : ",\"") + r.name + "\"";
                 return true;
             });
         }
         std::string replaced;
-        for (const auto& r:replacements) replaced+=(replaced.empty() ? "\"" : ",\"")+r.name+"\"";
+        for (const auto& r:replacements) replaced += std::string(replaced.empty() ? "\"" : ",\"") + r.name + "\"";
         logEvent("shader_replacement_set","\"vendor_id\":"+std::to_string(adapterVendor)+",\"kept_intel\":["+kept+
             "],\"replaced\":["+replaced+"]");
         // Search only free regions within the signed-rel32 range of this call.
