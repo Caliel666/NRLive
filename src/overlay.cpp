@@ -700,7 +700,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     g_in.mouse = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, h, 0 };
     TrackMouseEvent(&tme);
-    panelEvent(h, false); return 0;
+    panelEvent(h, g_in.down); return 0;
   }
   case WM_MOUSELEAVE:
     if (!g_in.down) { g_in.mouse = {-1, -1}; InvalidateRect(h, nullptr, FALSE); }
