@@ -42,7 +42,8 @@ struct Shared {
   double sumMs = 0; int frames = 0;
   double latSum = 0; int latN = 0;
   double gpuSum[4]{}; int gpuN[4]{};
-  bool fsr = false, nr = false, fg = false, nrBuilding = false;
+  bool fsr = false, nr = false, fg = false;
+  NrBuild nrBuild;
   ::Size cap{}, out{};
   float ring[kRing]{};
   int ringIdx = 0, ringCount = 0;
@@ -60,7 +61,8 @@ SysMon g_sys;
 struct View {
   float outFps = 0, srcFps = 0, genFps = 0, ftMs = 0, low1 = 0, low01 = 0;
   float lat = -1, gpu[4]{ -1, -1, -1, -1 };
-  bool fsr = false, nr = false, fg = false, nrBuilding = false;
+  bool fsr = false, nr = false, fg = false;
+  NrBuild nrBuild;
   ::Size cap{}, out{};
   SysSnapshot sys;
   float drawMs = 0;
@@ -68,7 +70,7 @@ struct View {
 
 enum class St { Label, Inline, Value, Unit, Big, PillOn, PillOff, Title, Muted };
 struct Seg { std::wstring text; St st; float w = 0; };
-struct Row { enum Kind { Text, Graph, Title } kind = Text; std::vector<Seg> segs; float h = 0; };
+struct Row { enum Kind { Text, Graph, Title, Build } kind = Text; std::vector<Seg> segs; float h = 0; };
 
 Color argb(COLORREF c, BYTE a = 255) { return Color(a, GetRValue(c), GetGValue(c), GetBValue(c)); }
 
@@ -207,11 +209,11 @@ std::vector<Row> buildRows(const OverlayHudConfig& c, const View& v, bool showCo
     row({ { L"CPU", St::Label }, { v.sys.cpuLoad >= 0 ? num0(v.sys.cpuLoad) : L"-", St::Value }, { L"%", St::Unit } });
   if (c.ram && v.sys.ramUsedGb >= 0)
     row({ { L"RAM", St::Label }, { num1(v.sys.ramUsedGb), St::Value }, { L"/ " + num1(v.sys.ramTotalGb) + L" GB", St::Unit } });
-  if (c.pipeline) {
+  if (c.pipeline)
     row({ { L"FSR", v.fsr ? St::PillOn : St::PillOff }, { L"NR", v.nr ? St::PillOn : St::PillOff },
           { L"FG", v.fg ? St::PillOn : St::PillOff } });
-    if (v.nrBuilding && !v.nr) rows.back().segs.push_back({ L"NR building", St::Muted });
-  }
+  // Whatever items are on: a first build can take a minute, and the HUD is where it shows.
+  if (v.nrBuild.active) rows.push_back({ Row::Build });
   if (c.gpu_times) {
     Row r{ Row::Text, { { L"PASS", St::Label } } };
     const wchar_t* names[3] = { L"MV", L"NR", L"FSR" };
@@ -263,21 +265,28 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
 
   float W = 0, H = 0;
   const float sparkW = 90 * s, divW = 14 * s;
+  // The build's row: its line of text, the bar and, for the long pipeline check, a line saying so.
+  const float buildW = 250 * s, barH = 9 * s, noteH = 15 * s;
+  const float buildBarY = lineH + 2 * s;
+  const bool buildNote = nrBuildChecksPipelines(v.nrBuild);
   if (horizontal) {
     float x = pad;
     for (size_t ri = 0; ri < rows.size(); ++ri) {
       auto& r = rows[ri];
       if (r.kind == Row::Graph) x += sparkW;
+      else if (r.kind == Row::Build) x += buildW;
       else for (size_t i = 0; i < r.segs.size(); ++i) x += segAdvance(r.segs[i], i + 1 < r.segs.size() ? &r.segs[i + 1] : nullptr);
       if (ri + 1 < rows.size()) x += divW;
     }
     W = x + pad;
     H = (c.fps ? bigH : lineH) + pad;
+    if (v.nrBuild.active) H = std::max(H, buildBarY + barH + pad + 2 * s);
   } else {
     float maxW = rows.size() > 1 ? 150 * s : 0; // a lone FPS row stays compact
     for (auto& r : rows) {
       if (r.kind == Row::Title) { r.h = titleH; continue; }
       if (r.kind == Row::Graph) { r.h = graphH + 4 * s; continue; }
+      if (r.kind == Row::Build) { r.h = buildBarY + barH + 6 * s + (buildNote ? noteH : 0); maxW = std::max(maxW, buildW); continue; }
       bool hasBig = false;
       float w = 0;
       for (size_t i = 0; i < r.segs.size(); ++i) {
@@ -382,6 +391,43 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
     }
   };
 
+  auto drawBuild = [&](float x, float y, float w, bool note) {
+    const NrBuild& b = v.nrBuild;
+    const float fraction = nrBuildFraction(b);
+    const float tx = y + (lineH - fontH(St::Value)) / 2;
+    text(L"NR", St::Value, x, tx, c.accent_color);
+    const float nameX = x + R.width(L"NR", St::Value) + gap;
+    text(nrBuildStage(b), St::Value, nameX, tx, c.text_color);
+    if (fraction >= 0) {
+      wchar_t count[32];
+      swprintf_s(count, L"%u / %u", std::min(b.done, b.total), b.total);
+      text(count, St::Value, x + w - R.width(count, St::Value), tx, c.text_color);
+    }
+    const RectF track(x, y + buildBarY, w, barH);
+    GraphicsPath trackPath; addPath(trackPath, track, barH / 2);
+    SolidBrush trackFill(argb(kPillOff, 230));
+    g.FillPath(&trackFill, &trackPath);
+    SolidBrush barFill(argb(c.accent_color));
+    if (fraction >= 0) {
+      if (fraction > 0) {
+        GraphicsPath done; addPath(done, RectF(x, track.Y, std::max(barH, w * fraction), barH), barH / 2);
+        g.FillPath(&barFill, &done);
+      }
+    } else {
+      // No progress to show: a block crossing the bar, which says only that it is alive.
+      const float block = w * 0.3f, phase = (GetTickCount64() % 1400) / 1400.0f;
+      GraphicsPath moving; addPath(moving, RectF(x - block + (w + block) * phase, track.Y, block, barH), barH / 2);
+      g.SetClip(&trackPath);
+      g.FillPath(&barFill, &moving);
+      g.ResetClip();
+    }
+    if (note && nrBuildChecksPipelines(b)) {
+      const std::wstring line = b.network == 3 ? L"once per driver, 30 min or more; no NR until it ends"
+                                               : L"once per driver, 1 to 2 min; no NR until it ends";
+      text(line, St::Muted, x, y + buildBarY + barH + 4 * s, kMuted);
+    }
+  };
+
   if (horizontal) {
     const float rowY = pad / 2, rowH = H - pad;
     float x = pad;
@@ -390,6 +436,9 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
       if (r.kind == Row::Graph) {
         drawGraph(x, rowY + 3 * s, sparkW, rowH - 6 * s, false);
         x += sparkW;
+      } else if (r.kind == Row::Build) {
+        drawBuild(x, rowY, buildW, false);
+        x += buildW;
       } else {
         for (size_t i = 0; i < r.segs.size(); ++i) {
           Seg sg = r.segs[i];
@@ -426,6 +475,11 @@ SIZE draw(Res& R, const OverlayHudConfig& c, const View& v, const float* graph, 
       }
       if (r.kind == Row::Graph) {
         drawGraph(pad, y + 2 * s, W - pad * 2, r.h - 4 * s, true);
+        y += r.h;
+        continue;
+      }
+      if (r.kind == Row::Build) {
+        drawBuild(pad, y + 2 * s, W - pad * 2, true);
         y += r.h;
         continue;
       }
@@ -484,6 +538,7 @@ void threadMain(HANDLE ready) {
   bool shown = false;
   LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
   ULONGLONG lastRefresh = 0, lastDraw = 0;
+  bool buildShown = false;
   double drawMsEma = 0;
 
   while (!g_quit) {
@@ -515,7 +570,7 @@ void threadMain(HANDLE ready) {
         }
         view.lat = g_s.latN ? (float)(g_s.latSum / g_s.latN) : -1;
         for (int i = 0; i < 4; ++i) view.gpu[i] = g_s.gpuN[i] ? (float)(g_s.gpuSum[i] / g_s.gpuN[i]) : -1;
-        view.fsr = g_s.fsr; view.nr = g_s.nr; view.fg = g_s.fg; view.nrBuilding = g_s.nrBuilding;
+        view.fsr = g_s.fsr; view.nr = g_s.nr; view.fg = g_s.fg;
         view.cap = g_s.cap; view.out = g_s.out;
         g_s.sumMs = 0; g_s.frames = 0; g_s.latSum = 0; g_s.latN = 0;
         for (int i = 0; i < 4; ++i) { g_s.gpuSum[i] = 0; g_s.gpuN[i] = 0; }
@@ -524,6 +579,7 @@ void threadMain(HANDLE ready) {
           for (int i = 0; i < g_s.ringCount; ++i) lowsBuf[i] = g_s.ring[(g_s.ringIdx - 1 - i + kRing) % kRing];
         }
       }
+      view.nrBuild = g_s.nrBuild;
       if (cfg.frame_timing) {
         const int n = std::min(cfg.graph_samples, g_s.ringCount);
         graph.resize(n);
@@ -554,7 +610,9 @@ void threadMain(HANDLE ready) {
         }
         view.sys = g_sys.snapshot();
       }
-      if (refresh || !shown || (cfg.frame_timing && now - lastDraw >= kGraphFrameMs)) {
+      const bool animate = cfg.frame_timing || view.nrBuild.active || buildShown;
+      buildShown = view.nrBuild.active;
+      if (refresh || !shown || (animate && now - lastDraw >= kGraphFrameMs)) {
         lastDraw = now;
         LARGE_INTEGER t0, t1; QueryPerformanceCounter(&t0);
         // Scale is relative to a 96 DPI monitor, like the rest of Windows.
@@ -579,7 +637,7 @@ void threadMain(HANDLE ready) {
     if (want) {
       const ULONGLONG next = lastRefresh + cfg.sample_ms;
       wait = next > now ? (DWORD)(next - now) : 1;
-      if (cfg.frame_timing) wait = std::min<DWORD>(wait, kGraphFrameMs);
+      if (cfg.frame_timing || view.nrBuild.active) wait = std::min<DWORD>(wait, kGraphFrameMs);
     }
     MsgWaitForMultipleObjects(0, nullptr, FALSE, wait, QS_ALLINPUT);
   }
@@ -658,6 +716,6 @@ void hudPushFrame(const HudFrame& f) {
   if (f.latencyMs >= 0 && f.latencyMs < 1000) { g_s.latSum += f.latencyMs; g_s.latN++; }
   const float gpu[4] = { f.gpuMotionMs, f.gpuNrMs, f.gpuFsrMs, f.gpuTotalMs };
   for (int i = 0; i < 4; ++i) if (gpu[i] >= 0) { g_s.gpuSum[i] += gpu[i]; g_s.gpuN[i]++; }
-  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg; g_s.nrBuilding = f.nrBuilding;
+  g_s.fsr = f.fsr; g_s.nr = f.nr; g_s.fg = f.fg; g_s.nrBuild = f.nrBuild;
   g_s.cap = f.capture; g_s.out = f.output;
 }

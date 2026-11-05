@@ -182,6 +182,25 @@ extern "C"
          * 1 (default, also for a host whose struct ends before it), 0 the picture these styles had before. Per
          * frame, no rebuild. */
         uint32_t style_grade;
+        /* Upstream 0.0.8.2's [Network] History Precision: 16 (default, also for a host whose struct ends before it)
+         * keeps the temporal history in RGBA16F as NVIDIA's DLL does, 32 in RGBA32F. A change rebuilds the network. */
+        uint32_t history_precision;
+        /* The RenoDX stage's [Preprocess] Inverse (0.0.8.1): 1 (default) the network's change comes back through the
+         * bounded inverse of the curve, 0 as its ratio in the picture the network was shown. Per frame. */
+        uint32_t preprocess_inverse;
+        /* MochizukiRenoOptions.inc's Passes (fast) block (0.0.8.1): the network once a frame, its change strengthened. */
+        uint32_t reno_passes_mode;
+        uint32_t reno_fast_method;
+        float reno_fast_passes_0;
+        float reno_fast_passes_1;
+        float reno_fast_passes_2;
+        uint32_t reno_fast_halo_limit_0;
+        uint32_t reno_fast_halo_limit_1;
+        uint32_t reno_fast_halo_limit_2;
+        float reno_fast_fine_0;
+        float reno_fast_fine_1;
+        float reno_fast_fine_2;
+        float reno_fast_edit_strength;
     } MochizukiNrControls;
 
     /* What the session is doing, for a menu. Safe to ask from any thread, at any rate. */
@@ -205,12 +224,13 @@ extern "C"
         float preprocess_ev;         /* the preprocess's auto exposure in EV, bias included; NaN when not metering */
         float white_point; /* the white point the last frame used, the game's exposure applied (linear colour) */
         /* While building: 1 planning, 2 reading the weights, 3 uploading them, 4 making the pipelines (build_done of
-           build_total), 5 finishing, 6 the RX 7000's pipeline check (once per driver); 0 otherwise. */
+           build_total), 5 finishing, 6 the RX 7000's or RX 6000's pipeline check (once per driver); 0 otherwise. */
         uint32_t build_stage;
         uint32_t build_done, build_total;
         uint32_t renodx_effective; /* 1: the network the frames run on is the RenoDX stage's */
         /* The session's network: 0 the FP8 one (RX 9000), 1 the RDNA3 one on FP16 matrices, compiled by the driver
-           (RX 7000, experimental), 2 the RDNA3 one from ACO's gfx11 machine code. */
+           (RX 7000, experimental), 2 the RDNA3 one from ACO's gfx11 machine code, 3 the RDNA2 one, its matrices emulated
+           in ALU (RX 6000, experimental). */
         uint32_t network;
         /* The fields end at byte 352, sizeof. */
     } MochizukiNrInfo;

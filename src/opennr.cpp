@@ -1,7 +1,6 @@
 #include "opennr.h"
 #include "nr_status.h"
-#include "LmxxfNrApi.h"
-#include "MochizukiNrControls.h"
+#include "opennr_controls.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -83,6 +82,16 @@ NrRuntimeConfig readConfig()
   s.antiHalo = readBool(sec, "MochizukiAntiHalo", s.antiHalo, ini);
   s.antiHaloStrength = readFloat(sec, "MochizukiAntiHaloStrength", s.antiHaloStrength, 0.f, 1.f, ini);
   s.passEstimate = readBool(sec, "MochizukiPassEstimate", s.passEstimate, ini);
+  s.noiseEveryFrame = readBool(sec, "MochizukiNoiseEveryFrame", s.noiseEveryFrame, ini);
+  s.historyPrecision = readUint(sec, "MochizukiHistoryPrecision", s.historyPrecision, 16, 32, ini);
+  s.preprocessInverse = readBool(sec, "MochizukiPreprocessInverse", s.preprocessInverse, ini);
+  s.whitePoint = readFloat(sec, "MochizukiWhitePoint", s.whitePoint, 0.f, 16.f, ini);
+  s.preprocess = readBool(sec, "MochizukiPreprocess", s.preprocess, ini);
+  s.preprocessExposure = readUint(sec, "MochizukiPreprocessExposure", s.preprocessExposure, 0, 2, ini);
+  s.preprocessBias = readFloat(sec, "MochizukiPreprocessBias", s.preprocessBias, -8.f, 8.f, ini);
+  s.preprocessCurve = readUint(sec, "MochizukiPreprocessCurve", s.preprocessCurve, 0, 6, ini);
+  s.preprocessContrast = readFloat(sec, "MochizukiPreprocessContrast", s.preprocessContrast, .5f, 2.f, ini);
+  s.preprocessSaturation = readFloat(sec, "MochizukiPreprocessSaturation", s.preprocessSaturation, .05f, 2.f, ini);
 #define MZR_F(name, def, lo, hi, group, label, member, help) s.name = readFloat(sec, #name, def, lo, hi, ini);
 #define MZR_U(name, def, lo, hi, group, label, member, help) s.name = readUint(sec, #name, def, lo, hi, ini);
 #define MZR_B(name, def, lo, hi, group, label, member, help) s.name = readBool(sec, #name, def, ini);
@@ -90,20 +99,13 @@ NrRuntimeConfig readConfig()
 #undef MZR_F
 #undef MZR_U
 #undef MZR_B
+  // Before 0.6.0 skin structure ran from -1, the model's own; that is 1 now, and a saved -1 means it.
+  auto skin = [&](const char* key, float& v) { if (readFloat(sec, key, 0.f, -1.f, 0.f, ini) < 0.f) v = 1.f; };
+  skin("MochizukiRenoSkinStructure", s.MochizukiRenoSkinStructure);
+  skin("MochizukiRenoPass2Skin", s.MochizukiRenoPass2Skin);
+  skin("MochizukiRenoPass3Skin", s.MochizukiRenoPass3Skin);
+  skin("MochizukiRenoPass4Skin", s.MochizukiRenoPass4Skin);
   return c;
-}
-
-const wchar_t* buildStage(uint32_t stage)
-{
-  switch (stage) {
-  case 1: return L"planning";
-  case 2: return L"reading the weights";
-  case 3: return L"uploading the weights";
-  case 4: return L"making pipelines";
-  case 5: return L"finishing";
-  case 6: return L"RX 7000 pipeline check (once per driver)";
-  default: return L"starting";
-  }
 }
 }
 
@@ -152,16 +154,28 @@ void NrConfigWatcher::save()
   put(L"MochizukiCascadeDetail", b(s.cascadeDetail));
   put(L"MochizukiAntiHalo", b(s.antiHalo));
   put(L"MochizukiAntiHaloStrength", f(s.antiHaloStrength));
-  put(L"MochizukiRenoStyle", std::to_wstring(s.MochizukiRenoStyle));
-  put(L"MochizukiRenoPasses", std::to_wstring(s.MochizukiRenoPasses));
-  put(L"MochizukiRenoAutoMask", b(s.MochizukiRenoAutoMask));
-  put(L"MochizukiRenoIntensity", f(s.MochizukiRenoIntensity));
-  put(L"MochizukiRenoLocalTone", f(s.MochizukiRenoLocalTone));
-  put(L"MochizukiRenoLocalStructure", f(s.MochizukiRenoLocalStructure));
-  put(L"MochizukiRenoSkinStructure", f(s.MochizukiRenoSkinStructure));
-  put(L"MochizukiRenoColorStrength", f(s.MochizukiRenoColorStrength));
-  put(L"MochizukiRenoTransferStrength", f(s.MochizukiRenoTransferStrength));
-  put(L"MochizukiRenoResolutionScale", f(s.MochizukiRenoResolutionScale));
+  // At its default a key has no line, so the file only says what was changed.
+  auto opt = [&](const wchar_t* key, const std::wstring& v, bool isDefault) {
+    WritePrivateProfileStringW(L"OpenNR", key, isDefault ? nullptr : v.c_str(), ini.c_str());
+  };
+  const OpenNrSettings d;
+  opt(L"MochizukiNoiseEveryFrame", b(s.noiseEveryFrame), s.noiseEveryFrame == d.noiseEveryFrame);
+  opt(L"MochizukiHistoryPrecision", std::to_wstring(s.historyPrecision), s.historyPrecision == d.historyPrecision);
+  opt(L"MochizukiPreprocessInverse", b(s.preprocessInverse), s.preprocessInverse == d.preprocessInverse);
+  opt(L"MochizukiWhitePoint", f(s.whitePoint), s.whitePoint == d.whitePoint);
+  opt(L"MochizukiPreprocess", b(s.preprocess), s.preprocess == d.preprocess);
+  opt(L"MochizukiPreprocessExposure", std::to_wstring(s.preprocessExposure), s.preprocessExposure == d.preprocessExposure);
+  opt(L"MochizukiPreprocessBias", f(s.preprocessBias), s.preprocessBias == d.preprocessBias);
+  opt(L"MochizukiPreprocessCurve", std::to_wstring(s.preprocessCurve), s.preprocessCurve == d.preprocessCurve);
+  opt(L"MochizukiPreprocessContrast", f(s.preprocessContrast), s.preprocessContrast == d.preprocessContrast);
+  opt(L"MochizukiPreprocessSaturation", f(s.preprocessSaturation), s.preprocessSaturation == d.preprocessSaturation);
+#define MZR_F(name, def, lo, hi, group, label, member, help) opt(L"" #name, f(s.name), s.name == d.name);
+#define MZR_U(name, def, lo, hi, group, label, member, help) opt(L"" #name, std::to_wstring(s.name), s.name == d.name);
+#define MZR_B(name, def, lo, hi, group, label, member, help) opt(L"" #name, b(s.name), s.name == d.name);
+#include "MochizukiRenoKeys.inc"
+#undef MZR_F
+#undef MZR_U
+#undef MZR_B
   // Our own write is not a change to read back.
   WIN32_FILE_ATTRIBUTE_DATA data{};
   if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &data))
@@ -173,6 +187,7 @@ struct OpenNrRuntime::Api {
   PFN_MochizukiNrSetControls setControls = nullptr;
   PFN_MochizukiNrGetInfo getInfo = nullptr;
   PFN_MochizukiNrGetControlDefaults getControlDefaults = nullptr;
+  PFN_MochizukiNrSetExposure setExposure = nullptr;
   MochizukiNrControls defaults{};
   MochizukiNrControls sent{};
   bool sentValid = false;
@@ -223,6 +238,7 @@ bool OpenNrRuntime::load()
   api->getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(module, "MochizukiNrGetInfo"));
   api->getControlDefaults =
       reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(module, "MochizukiNrGetControlDefaults"));
+  api->setExposure = reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(module, "MochizukiNrSetExposure"));
   api->defaults.struct_size = sizeof(MochizukiNrControls);
   if (api->getControlDefaults) api->getControlDefaults(&api->defaults);
   api->defaults.struct_size = sizeof(MochizukiNrControls);
@@ -301,6 +317,7 @@ bool OpenNrRuntime::ensureSession(ID3D12Device* device, ID3D12CommandQueue* queu
   m_session = ctx;
   m_sessionAco = (info.flags & LMXXF_NR_CREATE_FLAG_ACO) != 0;
   m_api->sentValid = false;
+  m_sentExposure = -1;
   m_frame = 0;
   m_error.clear();
   return true;
@@ -308,20 +325,14 @@ bool OpenNrRuntime::ensureSession(ID3D12Device* device, ID3D12CommandQueue* queu
 
 void OpenNrRuntime::sendControls(const OpenNrSettings& s)
 {
+  if (const float exposure = openNrExposure(s); m_api->setExposure && exposure != m_sentExposure) {
+    // Never called with the default, so a session without a white point runs as if this did not exist.
+    if (exposure > 0.f || m_sentExposure > 0.f) m_api->setExposure(m_session, exposure);
+    m_sentExposure = exposure;
+  }
   if (!m_api->setControls) return;
   MochizukiNrControls c = m_api->defaults;
-  c.history_strength = std::clamp(s.historyStrength, 0.f, 1.f);
-  c.anti_halo_margin = .25f * (1.f - std::clamp(s.antiHaloStrength, 0.f, 1.f));
-  c.style_grade = s.styleGrade ? 1u : 0u;
-  c.renodx = 1u;
-  c.reno_nr_enabled = 1u;
-#define MZR_F(name, def, lo, hi, group, label, member, help) c.member = std::clamp(s.name, lo, hi);
-#define MZR_U(name, def, lo, hi, group, label, member, help) c.member = std::clamp(s.name, uint32_t(lo), uint32_t(hi));
-#define MZR_B(name, def, lo, hi, group, label, member, help) c.member = s.name ? 1u : 0u;
-#include "MochizukiRenoKeys.inc"
-#undef MZR_F
-#undef MZR_U
-#undef MZR_B
+  fillOpenNrControls(s, c);
   if (m_api->sentValid && std::memcmp(&c, &m_api->sent, sizeof c) == 0) return;
   if (m_api->setControls(m_session, &c) == LMXXF_NR_OK) {
     m_api->sent = c;
@@ -338,8 +349,6 @@ ID3D12Resource* OpenNrRuntime::process(Graphics& graphics, ID3D12Resource* colou
   if (!colour || !size.w || !size.h || !ensureSession(graphics.device(), graphics.queue(), s)) return nullptr;
   sendControls(s);
 
-  // int4 mixed runs as ACO's machine code only and exists for the 310.8 model.
-  const bool int4 = s.int4 && m_sessionAco;
   LmxxfNrFrameInfo fi{};
   fi.struct_size = sizeof(fi);
   fi.frame_id = ++m_frame;
@@ -348,11 +357,7 @@ ID3D12Resource* OpenNrRuntime::process(Graphics& graphics, ID3D12Resource* colou
   fi.color_height = size.h;
   fi.color = colour;
   fi.color_state = static_cast<uint32_t>(colourState);
-  fi.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (int4 ? LMXXF_NR_FRAME_FLAG_INT4 : 0u) |
-             ((int4 || s.originalModel) ? LMXXF_NR_FRAME_FLAG_ORIGINAL_MODEL : 0u) |
-             (s.cascadeDetail ? LMXXF_NR_FRAME_FLAG_CASCADE_DETAIL : 0u) |
-             (s.antiHalo ? LMXXF_NR_FRAME_FLAG_ANTI_HALO : 0u) |
-             (s.passEstimate ? LMXXF_NR_FRAME_FLAG_PASS3_ESTIMATE : 0u);
+  fi.flags = openNrFrameFlags(s, m_sessionAco);
   // The RenoDX stage composes with its own strengths and scale.
   fi.transfer_strength = fi.color_strength = fi.model_scale = 1.0f;
   fi.passes = s.passes();
@@ -426,6 +431,7 @@ void OpenNrRuntime::destroySession()
     m_api->table.Destroy(m_session);
   }
   m_session = nullptr;
+  m_build = {};
 }
 
 void OpenNrRuntime::shutdown()
@@ -438,26 +444,29 @@ void OpenNrRuntime::shutdown()
 std::wstring OpenNrRuntime::status()
 {
   const uint64_t now = GetTickCount64();
-  if (m_session && m_api->getInfo && now - m_infoTick >= 500) {
+  // A build's stages go by in a second or two: asked more often while it runs.
+  if (m_session && m_api->getInfo && now - m_infoTick >= (m_build.active ? 100u : 500u)) {
     m_infoTick = now;
     MochizukiNrInfo info{};
     info.struct_size = sizeof(info);
     if (m_api->getInfo(m_session, &info) == LMXXF_NR_OK) {
       info.last_error[sizeof info.last_error - 1] = 0;
       wchar_t line[256]{};
-      m_building = info.building != 0;
+      m_build = { info.building != 0, info.build_stage, info.build_done, info.build_total, info.network };
       m_gpuMs = !info.failed && !info.building && info.frame_w ? info.gpu_ms_median : -1;
       if (info.failed) {
         m_sessionFailed = true;
         m_status = L"OpenNR failed: " + widen(info.last_error);
       } else if (info.building) {
-        if (info.build_stage == 4 && info.build_total)
-          swprintf_s(line, L"OpenNR building network: %s %u/%u", buildStage(4), info.build_done, info.build_total);
+        if (nrBuildFraction(m_build) >= 0)
+          swprintf_s(line, L"OpenNR building network: %s %u/%u", nrBuildStage(m_build), info.build_done, info.build_total);
         else
-          swprintf_s(line, L"OpenNR building network: %s", buildStage(info.build_stage));
+          swprintf_s(line, L"OpenNR building network: %s%s", nrBuildStage(m_build),
+                     nrBuildChecksPipelines(m_build) ? L" (once per driver)" : L"");
         m_status = line;
       } else if (info.frame_w) {
-        const wchar_t* network = info.network == 0 ? L"" : L" | RX 7000 (experimental)";
+        const wchar_t* network = info.network == 0 ? L""
+                               : info.network == 3 ? L" | RX 6000 (experimental)" : L" | RX 7000 (experimental)";
         swprintf_s(line, L"OpenNR %ux%u -> %ux%u, %.2f ms%s", info.model_w, info.model_h, info.frame_w, info.frame_h,
                    info.gpu_ms_median, network);
         m_status = line;
@@ -467,7 +476,7 @@ std::wstring OpenNrRuntime::status()
     }
   }
   // While the network builds, PrepareFrame declines frames: the build stage says more than its error.
-  if (!m_session || (!m_building && !m_running && !m_error.empty()) || m_status.empty()) return m_error;
+  if (!m_session || (!m_build.active && !m_running && !m_error.empty()) || m_status.empty()) return m_error;
   return m_status;
 }
 

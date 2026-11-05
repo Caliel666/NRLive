@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics.h"
+#include "nr_build.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -26,6 +27,19 @@ struct OpenNrSettings {
   bool antiHalo = true;
   float antiHaloStrength = 0.8f;
   bool passEstimate = true;
+  bool noiseEveryFrame = false; // MochizukiNoiseEveryFrame
+  uint32_t historyPrecision = 16; // MochizukiHistoryPrecision: 16 RGBA16F, 32 RGBA32F; rebuilds
+  bool preprocessInverse = true;  // MochizukiPreprocessInverse
+  // MochizukiWhitePoint, NRLive's own: what counts as white in a frame taken as Linear, handed to the runtime as the
+  // exposure a game would give it (1 / white). 0: none, the runtime meters the frame.
+  float whitePoint = 0.f;
+  // MochizukiPreprocess*: what the network is shown, every change taken back out of its answer.
+  bool preprocess = false;
+  uint32_t preprocessExposure = 1; // 0 off, 1 auto, 2 fixed (bias alone)
+  float preprocessBias = 0.f;      // EV
+  uint32_t preprocessCurve = 3;    // 0 none, 1 neutral, 2 reinhard, 3 filmic, 4 gt, 5 aces, 6 agx
+  float preprocessContrast = 1.f;
+  float preprocessSaturation = 1.f;
   // The RenoDX stage's keys (MochizukiRenoKeys.inc), by key name.
 #define MZR_F(name, def, lo, hi, group, label, member, help) float name = def;
 #define MZR_U(name, def, lo, hi, group, label, member, help) uint32_t name = def;
@@ -83,8 +97,8 @@ public:
   void shutdown();
   // One line for the HUD/log: building, running (size, GPU time, network) or why not.
   std::wstring status();
-  // From the last status() call: the network is still being built, and its median GPU ms (<0 none).
-  bool building() const { return m_building; }
+  // From the last status() call: the network build, and the network's median GPU ms (<0 none).
+  const NrBuild& build() const { return m_build; }
   float gpuMs() const { return m_gpuMs; }
 
 private:
@@ -102,10 +116,11 @@ private:
   bool m_failed = false;
   bool m_sessionAco = false;
   bool m_running = false;
-  bool m_building = false;
+  NrBuild m_build;
   bool m_sessionFailed = false;
   std::wstring m_error;
   std::wstring m_status;
   uint64_t m_infoTick = 0;
   float m_gpuMs = -1;
+  float m_sentExposure = -1;
 };

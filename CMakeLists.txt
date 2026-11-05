@@ -124,6 +124,11 @@ if(BUILD_TESTING)
   target_link_libraries(hud_config_test PRIVATE dxgi pdh)
   add_test(NAME hud_config_presets_lows_and_sensors COMMAND hud_config_test)
 
+  add_executable(opennr_settings_test tests/opennr_settings_test.cpp)
+  target_include_directories(opennr_settings_test PRIVATE "${CMAKE_SOURCE_DIR}/include" "${CMAKE_SOURCE_DIR}/third_party/opennr")
+  target_compile_definitions(opennr_settings_test PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  add_test(NAME opennr_defaults_int4_and_build_progress COMMAND opennr_settings_test)
+
   add_executable(frame_limiter_test tests/frame_limiter_test.cpp)
   target_include_directories(frame_limiter_test PRIVATE "${CMAKE_SOURCE_DIR}/include")
   add_test(NAME frame_limiter_invariants COMMAND frame_limiter_test)

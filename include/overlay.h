@@ -3,6 +3,7 @@
 #include <string>
 #include "graphics.h"
 #include "hud_config.h"
+#include "nr_build.h"
 
 // Frame pacing settings persisted in scaleconfig.ini.
 struct OverlayFrameLimitConfig {
@@ -45,7 +46,7 @@ struct OverlayFrameStats {
   float sourceMs = 0;          // interval between captured frames
   Size capture{}, output{};
   bool fsr = false, nr = false;
-  bool nrBuilding = false;     // OpenNR is still building its network
+  NrBuild nrBuild;             // OpenNR's network build
   float latencyMs = -1;        // frame acquired -> present call, <0 unknown
   float gpuMotionMs = -1, gpuNrMs = -1, gpuFsrMs = -1, gpuTotalMs = -1;
 };
