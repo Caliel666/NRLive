@@ -40,6 +40,8 @@ static bool g_initialized = false;
 static bool g_toggleFsr = false, g_screenshot = false, g_toggleFrameLimit = false, g_toggleFg = false;
 static OverlayFrameLimitConfig g_frameLimit{};
 static bool g_fgEnabled = false;
+static int g_fgBackend = 0; // 0=FSR, 1=XeSS MFG; applied on next launch
+static int g_xeMfgMultiplier = 3;
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static OverlayDlssNrConfig g_dlssNr{};
@@ -66,6 +68,8 @@ static void loadCfg() {
   g_frameLimit.fps = frame_limit::clampFps(GetPrivateProfileIntW(L"FrameLimiter", L"fps", 60, ini.c_str()));
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
+  g_fgBackend = std::clamp(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str()), 0, 1);
+  g_xeMfgMultiplier = std::clamp(GetPrivateProfileIntW(L"FrameGeneration", L"multiplier", 3, ini.c_str()), 2, 6);
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
@@ -101,6 +105,9 @@ static void saveCfg() {
   swprintf_s(limitValue, L"%d", g_frameLimit.fps); WritePrivateProfileStringW(L"FrameLimiter", L"fps", limitValue, ini.c_str());
   swprintf_s(limitValue, L"%d", g_frameLimit.method); WritePrivateProfileStringW(L"FrameLimiter", L"method", limitValue, ini.c_str());
   WritePrivateProfileStringW(L"FrameGeneration", L"enabled", g_fgEnabled ? L"1" : L"0", ini.c_str());
+  wchar_t fgValue[16]{};
+  swprintf_s(fgValue, L"%d", g_fgBackend); WritePrivateProfileStringW(L"FrameGeneration", L"backend", fgValue, ini.c_str());
+  swprintf_s(fgValue, L"%d", g_xeMfgMultiplier); WritePrivateProfileStringW(L"FrameGeneration", L"multiplier", fgValue, ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"enabled", g_dlssNr.enabled ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"model", g_dlssNr.newModel ? L"1" : L"0", ini.c_str());
   wchar_t nrValue[32]{};
@@ -187,7 +194,7 @@ static Pending g_pending = Pending::None;
 static bool g_dirtyCfg = false, g_dirtyNr = false;
 // Which sections are open: General 0-2, HUD 3-6, NR 8-11 (Performance starts closed), 12 Composition,
 // 13 its look details, 14 Encoding and exposure, 15 its encoding, 16 its preprocess, 17 Fast mode options.
-static bool g_sec[18] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false};
+static bool g_sec[19] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false, true};
 
 static void generalTab(kit::Panel& p) {
   if (p.section(L"FSR", &g_sec[0])) {
@@ -207,6 +214,19 @@ static void generalTab(kit::Panel& p) {
     if (p.button(L"Choose folder...")) g_pending = Pending::Browse;
     if (p.button(L"Open folder")) g_pending = Pending::OpenFolder;
     p.text(L"The camera button saves the upscaled frame as PNG, without the overlay.");
+  }
+  if (p.section(L"Frame Generation", &g_sec[18])) {
+    static const wchar_t* backends[] = {L"FSR Frame Generation", L"XeSS MFG (AMD)"};
+    g_dirtyCfg |= p.choice(L"Backend", &g_fgBackend, backends, 2,
+      L"Selects the native NRLive frame-generation provider. The choice is applied on the next NRLive launch.");
+    static const wchar_t* multipliers[] = {L"2x", L"3x", L"4x", L"5x", L"6x"};
+    int multiplier = std::clamp(g_xeMfgMultiplier - 2, 0, 4);
+    if (p.choice(L"XeSS output multiplier", &multiplier, multipliers, 5,
+        L"Number of output frames per captured frame. XeSS MFG requires the AMD runtime setup beside NRLive.")) {
+      g_xeMfgMultiplier = multiplier + 2;
+      g_dirtyCfg = true;
+    }
+    p.text(L"Changing the backend requires restarting NRLive. The FG top-bar switch enables or disables the selected backend.");
   }
 }
 
@@ -846,6 +866,8 @@ void overlaySetDlssNrEnabled(bool enabled) {
   if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
 }
 bool overlayFgEnabled() { return g_fgEnabled; }
+int overlayFgBackend() { return g_fgBackend; }
+int overlayXeMfgMultiplier() { return g_xeMfgMultiplier; }
 void overlaySetFgEnabled(bool enabled) {
   g_fgEnabled = enabled;
   saveCfg();
