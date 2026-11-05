@@ -149,6 +149,7 @@ struct XeMfgFrameGeneration::Api
     decltype(&::xefgSwapChainSetEnabled) setEnabled = nullptr;
     decltype(&::xefgSwapChainSetNumInterpolatedFrames) setFrameCount = nullptr;
     decltype(&::xefgSwapChainSetPresentId) setPresentId = nullptr;
+    decltype(&::xefgSwapChainGetLastPresentStatus) getLastPresentStatus = nullptr;
     decltype(&::xefgSwapChainSetLatencyReduction) setLatencyReduction = nullptr;
     decltype(&::xefgSwapChainSetLoggingCallback) setLogging = nullptr;
     decltype(&::xefgSwapChainDestroy) destroy = nullptr;
@@ -176,6 +177,7 @@ struct XeMfgFrameGeneration::Api
         RESOLVE_FG(setEnabled);
         RESOLVE_FG(setFrameCount);
         RESOLVE_FG(setPresentId);
+        RESOLVE_FG(getLastPresentStatus);
         RESOLVE_FG(setLatencyReduction);
         RESOLVE_FG(setLogging);
         RESOLVE_FG(destroy);
@@ -270,14 +272,18 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS || !fgContext)
             throw std::runtime_error("xefg_create_context_" + std::to_string(static_cast<int>(fgResult)));
         m_context = fgContext;
-        m_api->setLogging(fgContext, XEFG_SWAPCHAIN_LOGGING_LEVEL_WARNING, logFg, nullptr);
+        fgResult = m_api->setLogging(fgContext, XEFG_SWAPCHAIN_LOGGING_LEVEL_WARNING, logFg, nullptr);
+        if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+            throw std::runtime_error("xefg_set_logging_" + std::to_string(static_cast<int>(fgResult)));
 
         xell_context_handle_t xellContext = nullptr;
         xell_result_t llResult = m_api->createXell(device, &xellContext);
         if (llResult != XELL_RESULT_SUCCESS || !xellContext)
             throw std::runtime_error("xell_create_context_" + std::to_string(static_cast<int>(llResult)));
         m_xell = xellContext;
-        m_api->setXellLogging(xellContext, XELL_LOGGING_LEVEL_WARNING, logLl);
+        llResult = m_api->setXellLogging(xellContext, XELL_LOGGING_LEVEL_WARNING, logLl);
+        if (llResult != XELL_RESULT_SUCCESS)
+            throw std::runtime_error("xell_set_logging_" + std::to_string(static_cast<int>(llResult)));
         xell_sleep_params_t sleep{};
         sleep.bLowLatencyMode = 1;
         llResult = m_api->setSleepMode(xellContext, &sleep);
@@ -310,8 +316,12 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         m_failed = false;
         m_active = false;
         m_error = L"XeSS MFG ready (AMD 2x-6x)";
-        m_api->setFrameCount(fgContext, 1);
-        m_api->setEnabled(fgContext, 0);
+        fgResult = m_api->setFrameCount(fgContext, 1);
+        if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+            throw std::runtime_error("xefg_set_initial_frame_count_" + std::to_string(static_cast<int>(fgResult)));
+        fgResult = m_api->setEnabled(fgContext, 0);
+        if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+            throw std::runtime_error("xefg_set_initial_enabled_" + std::to_string(static_cast<int>(fgResult)));
         m_api->addMarker(xellContext, m_frameId, XELL_SIMULATION_START);
         logEvent("init_ok", "\"vendor_id\":4098,\"maximum_multiplier\":6,\"display\":\"" +
                  std::to_string(display.w) + "x" + std::to_string(display.h) + "\"");
@@ -364,13 +374,13 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
         auto tag = [&](xefg_swapchain_resource_type_t type, ID3D12Resource* resource) {
             xefg_swapchain_d3d12_resource_data_t data{};
             data.type = type;
-            data.validity = XEFG_SWAPCHAIN_RV_UNTIL_NEXT_PRESENT;
+            data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
             data.resourceBase = {0, 0};
             data.resourceSize = {render.w, render.h};
             data.pResource = resource;
             data.incomingState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            return m_api->tagResource(fg, nullptr, id, &data);
+            return m_api->tagResource(fg, commandList, id, &data);
         };
         result = tag(XEFG_SWAPCHAIN_RES_DEPTH, depth);
         if (result == XEFG_SWAPCHAIN_RESULT_SUCCESS)
@@ -386,7 +396,7 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
         const float identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
         std::memcpy(constants.viewMatrix, identity, sizeof(identity));
         const float aspect = float(render.w) / float(render.h);
-        makeProjection(aspect, 0.01f, 1000.0f, 1.0f, true, constants.projectionMatrix);
+        makeProjection(aspect, 0.1f, 10000.0f, 1.0471976f, true, constants.projectionMatrix);
         constants.jitterOffsetX = 0.0f;
         constants.jitterOffsetY = 0.0f;
         constants.motionVectorScaleX = 1.0f;
@@ -419,9 +429,35 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
     return true;
 }
 
-void XeMfgFrameGeneration::afterPresent() noexcept
+bool XeMfgFrameGeneration::afterPresent() noexcept
 {
-    if (!m_api || !m_xell || !m_context || m_failed) return;
+    if (!m_api || !m_xell || !m_context || m_failed) {
+        m_active = false;
+        return false;
+    }
+
+    xefg_swapchain_present_status_t status{};
+    const auto statusResult = m_api->getLastPresentStatus(
+        static_cast<xefg_swapchain_handle_t>(m_context), &status);
+    if (statusResult != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
+        m_failed = true;
+        m_active = false;
+        m_error = L"XeSS MFG: present status query failed (" +
+                  std::to_wstring(static_cast<int>(statusResult)) + L")";
+        logEvent("present_status_failed", "\"result\":" + std::to_string(static_cast<int>(statusResult)));
+        return false;
+    }
+
+    // A successful real-frame present is not proof of interpolation. Require the
+    // swapchain status to confirm more than one frame was actually presented.
+    m_active = status.isFrameGenEnabled != 0 &&
+               status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS &&
+               status.framesPresented > 1;
+    logEvent("present_status",
+        "\"enabled\":" + std::to_string(status.isFrameGenEnabled) +
+        ",\"frames_presented\":" + std::to_string(status.framesPresented) +
+        ",\"frame_gen_result\":" + std::to_string(static_cast<int>(status.frameGenResult)));
+
     auto xell = static_cast<xell_context_handle_t>(m_xell);
     const uint32_t presented = m_frameId;
     const uint32_t next = presented + 1;
@@ -433,10 +469,11 @@ void XeMfgFrameGeneration::afterPresent() noexcept
         m_error = L"XeSS MFG: XeLL pacing failed (" +
                   std::to_wstring(static_cast<int>(slept)) + L")";
         logEvent("xell_sleep_failed", "\"result\":" + std::to_string(static_cast<int>(slept)));
-        return;
+        return false;
     }
     m_frameId = next ? next : 1;
     m_api->addMarker(xell, m_frameId, XELL_SIMULATION_START);
+    return m_active;
 }
 
 void XeMfgFrameGeneration::shutdown() noexcept
