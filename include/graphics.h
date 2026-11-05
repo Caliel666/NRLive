@@ -28,6 +28,10 @@ public:
   void end();
   ID3D12Device* device() const { return m_dev.Get(); }
   IDXGISwapChain4* swapChain() const { return m_swap.Get(); }
+  IDXGIFactory2* factory() const { return m_factory.Get(); }
+  bool swapChainDescription(DXGI_SWAP_CHAIN_DESC1& desc) const {
+    return m_swap1 && SUCCEEDED(m_swap1->GetDesc1(&desc));
+  }
   ID3D12CommandQueue* queue() const { return m_queue.Get(); }
   ID3D12GraphicsCommandList* cmd() const { return (m_interopContinuation ? m_cmdContinuation : m_cmd).Get(); }
   ID3D12Resource* backbuffer() const { return m_back[m_index].Get(); }
