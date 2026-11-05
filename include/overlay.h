@@ -65,6 +65,7 @@ const OverlayDlssNrConfig& overlayDlssNrConfig();
 void overlaySetDlssNrEnabled(bool enabled);
 bool overlayFgEnabled();
 int overlayFgBackend();             // 0=FSR, 1=XeSS MFG; selected at startup
+void overlaySetFgBackend(int backend); // non-persisting command-line override
 int overlayXeMfgMultiplier();       // 2x..6x output multiplier
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
