@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 static std::string escape(const std::string& value);
 static void logEvent(const char* stage, const std::string& fields = {});
@@ -430,9 +431,9 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
         m_error = std::wstring(L"XeSS MFG: ") + label + L" failed (" +
                   std::to_wstring(result) + L")";
         logEvent("fg_call_failed",
-            "\\"operation\\":\\"" + std::string(operation) +
-            "\\",\\"result\\":" + std::to_string(result) +
-            ",\\"present_id\\":" + std::to_string(id));
+            "\"operation\":\"" + std::string(operation) +
+            "\",\"result\":" + std::to_string(result) +
+            ",\"present_id\":" + std::to_string(id));
     };
 
     if (fgCallOk) {
