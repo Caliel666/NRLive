@@ -8,8 +8,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <intrin.h>
+#include <mutex>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -151,6 +154,163 @@ void logLl(const char* message, xell_logging_level_t level)
     logEvent("xell", std::string("\"level\":") + std::to_string(static_cast<int>(level)) +
              ",\"message\":\"" + escape(message ? message : "") + "\"");
 }
+
+// XeFG creates a separate native presentation chain while initializing from
+// a descriptor. Raise only the provider's CreateSwapChainForHwnd call; do not
+// change the proxy/application chain's descriptor or NRLive's own backbuffers.
+namespace {
+using CreateSwapChainForHwndFn = HRESULT (STDMETHODCALLTYPE*)(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+constexpr size_t kCreateSwapChainForHwndSlot = 15;
+constexpr size_t kFactoryVtableCopySlots = 64;
+alignas(64) void* gFactoryVtableCopy[kFactoryVtableCopySlots + 1]{};
+void** gFactoryVtableSource = nullptr;
+std::mutex gFactoryVtableMutex;
+std::atomic<CreateSwapChainForHwndFn> gOriginalCreateSwapChainForHwnd{nullptr};
+thread_local uint32_t gRaiseNativeBuffers = 0;
+thread_local HMODULE gRaiseNativeBuffersProvider = nullptr;
+std::atomic<uint32_t> gNativeBufferLogCount{0};
+
+bool addressOwnedBy(HMODULE module, const void* address) noexcept
+{
+    HMODULE owner = nullptr;
+    return module && address &&
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(const_cast<void*>(address)), &owner) &&
+        owner == module;
+}
+
+HRESULT STDMETHODCALLTYPE raisedCreateSwapChainForHwnd(
+    IDXGIFactory2* self, IUnknown* device, HWND window,
+    const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen,
+    IDXGIOutput* output, IDXGISwapChain1** swapChain)
+{
+    const auto original = gOriginalCreateSwapChainForHwnd.load(std::memory_order_acquire);
+    if (!original) return E_UNEXPECTED;
+    const uint32_t requested = gRaiseNativeBuffers;
+    const HMODULE provider = gRaiseNativeBuffersProvider;
+    if (!requested || !desc || !addressOwnedBy(provider, _ReturnAddress()))
+        return original(self, device, window, desc, fullscreen, output, swapChain);
+
+    if (desc->BufferCount >= requested)
+        return original(self, device, window, desc, fullscreen, output, swapChain);
+
+    DXGI_SWAP_CHAIN_DESC1 raised = *desc;
+    raised.BufferCount = requested;
+    HRESULT result = original(self, device, window, &raised, fullscreen, output, swapChain);
+    const bool fellBack = FAILED(result);
+    if (fellBack)
+        result = original(self, device, window, desc, fullscreen, output, swapChain);
+
+    if (gNativeBufferLogCount.fetch_add(1, std::memory_order_relaxed) < 8) {
+        logEvent("native_buffers",
+            "\"requested\":" + std::to_string(desc->BufferCount) +
+            ",\"created\":" + std::to_string(fellBack ? desc->BufferCount : requested) +
+            ",\"fallback\":" + std::string(fellBack ? "true" : "false") +
+            ",\"result\":" + std::to_string(static_cast<long>(result)));
+    }
+    return result;
+}
+
+class NativeBuffersScope
+{
+public:
+    NativeBuffersScope(IDXGIFactory2* factory, HMODULE provider, uint32_t buffers) noexcept
+    {
+        try {
+            if (!factory || !provider || buffers < 2) { reason_ = "invalid_arguments"; return; }
+
+            auto** vtable = *reinterpret_cast<void***>(factory);
+            HMODULE dxgiModule = nullptr;
+            wchar_t dxgiPath[MAX_PATH]{}, systemDirectory[MAX_PATH]{};
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                    reinterpret_cast<LPCWSTR>(vtable), &dxgiModule) ||
+                !dxgiModule ||
+                !GetModuleFileNameW(dxgiModule, dxgiPath, MAX_PATH)) {
+                reason_ = "factory_vtable_module";
+                return;
+            }
+            const UINT systemLength = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+            if (!systemLength || systemLength >= MAX_PATH - 10) {
+                reason_ = "system_directory";
+                return;
+            }
+            std::wstring expectedDxgi = systemDirectory;
+            expectedDxgi += L"\\dxgi.dll";
+            if (_wcsicmp(dxgiPath, expectedDxgi.c_str()) != 0 ||
+                !addressOwnedBy(dxgiModule, vtable[kCreateSwapChainForHwndSlot])) {
+                reason_ = "factory_not_system_dxgi";
+                return;
+            }
+
+            {
+                std::lock_guard lock(gFactoryVtableMutex);
+                if (!gFactoryVtableSource) {
+                    for (size_t i = 0; i <= kFactoryVtableCopySlots; ++i) {
+                        void* const* entry = vtable - 1 + i;
+                        if (!addressOwnedBy(dxgiModule, entry)) break;
+                        gFactoryVtableCopy[i] = *entry;
+                    }
+                    if (!gFactoryVtableCopy[1 + kCreateSwapChainForHwndSlot]) {
+                        reason_ = "factory_vtable_copy";
+                        return;
+                    }
+                    gOriginalCreateSwapChainForHwnd.store(
+                        reinterpret_cast<CreateSwapChainForHwndFn>(vtable[kCreateSwapChainForHwndSlot]),
+                        std::memory_order_release);
+                    gFactoryVtableCopy[1 + kCreateSwapChainForHwndSlot] =
+                        reinterpret_cast<void*>(&raisedCreateSwapChainForHwnd);
+                    gFactoryVtableSource = vtable;
+                } else if (gFactoryVtableSource != vtable) {
+                    reason_ = "factory_vtable_changed";
+                    return;
+                }
+            }
+
+            gRaiseNativeBuffers = buffers;
+            gRaiseNativeBuffersProvider = provider;
+            factoryObject_ = reinterpret_cast<void**>(factory);
+            originalVtable_ = InterlockedCompareExchangePointer(
+                factoryObject_, &gFactoryVtableCopy[1], vtable);
+            if (originalVtable_ != vtable) {
+                gRaiseNativeBuffers = 0;
+                gRaiseNativeBuffersProvider = nullptr;
+                factoryObject_ = nullptr;
+                originalVtable_ = nullptr;
+                reason_ = "factory_already_swapped";
+                return;
+            }
+            applied_ = true;
+            reason_ = "applied";
+        } catch (...) {
+            reason_ = "factory_exception";
+        }
+    }
+
+    ~NativeBuffersScope()
+    {
+        gRaiseNativeBuffers = 0;
+        gRaiseNativeBuffersProvider = nullptr;
+        if (factoryObject_)
+            InterlockedCompareExchangePointer(factoryObject_, originalVtable_, &gFactoryVtableCopy[1]);
+    }
+
+    NativeBuffersScope(const NativeBuffersScope&) = delete;
+    NativeBuffersScope& operator=(const NativeBuffersScope&) = delete;
+    bool applied() const noexcept { return applied_; }
+    const char* reason() const noexcept { return reason_; }
+
+private:
+    void** factoryObject_ = nullptr;
+    void* originalVtable_ = nullptr;
+    const char* reason_ = "not_applied";
+    bool applied_ = false;
+};
+}
 }
 
 struct XeMfgFrameGeneration::Api
@@ -160,7 +320,7 @@ struct XeMfgFrameGeneration::Api
     HMODULE payloadModule = nullptr;
 
     decltype(&::xefgSwapChainD3D12CreateContext) createContext = nullptr;
-    decltype(&::xefgSwapChainD3D12InitFromSwapChain) initFromSwapChain = nullptr;
+    decltype(&::xefgSwapChainD3D12InitFromSwapChainDesc) initFromSwapChainDesc = nullptr;
     decltype(&::xefgSwapChainD3D12GetSwapChainPtr) getSwapChain = nullptr;
     decltype(&::xefgSwapChainD3D12TagFrameResource) tagResource = nullptr;
     decltype(&::xefgSwapChainTagFrameConstants) tagConstants = nullptr;
@@ -194,7 +354,7 @@ struct XeMfgFrameGeneration::Api
         member = symbol<decltype(member)>(llModule, exported); \
         if (!member) { missingExport = std::string("libxell.dll!") + exported; return false; }
         RESOLVE_FG(createContext, "xefgSwapChainD3D12CreateContext");
-        RESOLVE_FG(initFromSwapChain, "xefgSwapChainD3D12InitFromSwapChain");
+        RESOLVE_FG(initFromSwapChainDesc, "xefgSwapChainD3D12InitFromSwapChainDesc");
         RESOLVE_FG(getSwapChain, "xefgSwapChainD3D12GetSwapChainPtr");
         RESOLVE_FG(tagResource, "xefgSwapChainD3D12TagFrameResource");
         RESOLVE_FG(tagConstants, "xefgSwapChainTagFrameConstants");
@@ -277,14 +437,14 @@ XeMfgFrameGeneration::~XeMfgFrameGeneration()
     shutdown();
 }
 
-bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
-                                IDXGISwapChain4*& applicationSwapChain,
-                                ID3D12CommandQueue* queue,
-                                IDXGISwapChain4** wrappedSwapChain)
+bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display, HWND output,
+                                IDXGIFactory2* factory, const DXGI_SWAP_CHAIN_DESC1& swapChainDesc,
+                                ID3D12CommandQueue* queue, IDXGISwapChain4** wrappedSwapChain)
 {
     logEvent("init_begin");
     shutdown();
-    if (!device || !applicationSwapChain || !queue || !wrappedSwapChain) {
+    if (!device || !output || !factory || !queue || !wrappedSwapChain ||
+        !swapChainDesc.Width || !swapChainDesc.Height || !swapChainDesc.BufferCount) {
         m_error = L"XeSS MFG: invalid D3D12 initialization arguments";
         return false;
     }
@@ -366,21 +526,30 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
             throw std::runtime_error("xefg_latency_reduction_" + std::to_string(static_cast<int>(fgResult)));
 
         xefg_swapchain_d3d12_init_params_t params{};
-        params.pApplicationSwapChain = applicationSwapChain;
+        params.pApplicationSwapChain = nullptr;
         params.initFlags = XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH;
         params.maxInterpolatedFrames = 5;
         params.creationNodeMask = 1;
         params.visibleNodeMask = 1;
         params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;
-        logEvent("xefg_init_swapchain_begin");
-        // XeSS InitFromSwapChain consumes the caller's one owned swapchain
-        // reference on success. Clear the caller's pointer immediately after
-        // that successful transfer so it cannot Release an invalid COM object.
-        fgResult = m_api->initFromSwapChain(fgContext, queue, &params);
+        logEvent("xefg_init_swapchain_desc_begin",
+            "\"app_buffers\":" + std::to_string(swapChainDesc.BufferCount) +
+            ",\"native_buffers_requested\":8);
+
+        // InitFromSwapChainDesc creates the replacement chain after NRLive has
+        // released its original chain. Scope the DXGI factory call so only a
+        // CreateSwapChainForHwnd issued by libxess_fg.dll gets an 8-buffer
+        // native presentation chain; the proxy keeps the app's original
+        // descriptor and its low-latency two-buffer behavior.
+        NativeBuffersScope nativeBuffers(factory, m_api->fgModule, 8);
+        logEvent("xefg_native_buffers_scope",
+            std::string("\"applied\":") + (nativeBuffers.applied() ? "true" : "false") +
+            ",\"reason\":\"" + escape(nativeBuffers.reason()) + "\"");
+        fgResult = m_api->initFromSwapChainDesc(
+            fgContext, output, &swapChainDesc, nullptr, queue, factory, &params);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            throw std::runtime_error("xefg_init_swapchain_" + std::to_string(static_cast<int>(fgResult)));
-        applicationSwapChain = nullptr;
-        logEvent("application_swapchain_ownership_transferred");
+            throw std::runtime_error("xefg_init_swapchain_desc_" + std::to_string(static_cast<int>(fgResult)));
+        logEvent("xefg_init_swapchain_desc_complete");
 
         void* wrapped = nullptr;
         logEvent("xefg_get_wrapped_swapchain_begin");
