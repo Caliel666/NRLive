@@ -71,6 +71,7 @@ add_executable(NRLive WIN32
   src/fsr.cpp
   src/xess_mfg.cpp
   third_party/xess_mfg/runtime_payload.cpp
+  third_party/xess_mfg/host_unlock.cpp
   src/dlssnr.cpp
   src/dlssnr_stabilizer.cpp
   src/opennr.cpp
