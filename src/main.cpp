@@ -1,6 +1,7 @@
 #include "graphics.h"
 #include "capture.h"
 #include "fsr.h"
+#include "xess_mfg.h"
 #include "dlssnr.h"
 #include "opennr.h"
 #include "nr_status.h"
@@ -311,35 +312,53 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     setOverlayOpen(false);
     setStatus(out, label.c_str());
 
-    // Create the actual AMD FSR Frame Generation context. The overlay toggle
-    // remains off unless the provider initializes successfully.
+    // Exactly one provider owns NRLive's output swapchain for this session.
+    // Backend changes are saved by the overlay and applied on the next launch.
+    const bool xeMfgSelected = overlayFgBackend() == 1;
     FsrFrameGeneration fg;
-    // Give the wrapper one owned reference, then drop every reference held by
-    // Graphics before AMD destroys/recreates the swapchain. Keeping m_back[] or
-    // m_swap1 alive here makes the SDK's swapchain replacement fail at runtime.
-    IDXGISwapChain4* fgSwapChain = gfx.swapChain();
-    if (fgSwapChain) fgSwapChain->AddRef();
-    gfx.releaseSwapChainForWrap();
-    bool fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
-    logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError() : L"FSR frame generation init FAILED: " + fg.lastError());
-    if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
-      fg.shutdown();
-      fgOk = false;
-      logMain(L"FSR FG wrapped swapchain adoption failed; rebuilding ordinary swapchain");
+    XeMfgFrameGeneration xeMfg;
+    bool fgOk = false;
+    if (xeMfgSelected) {
+      IDXGISwapChain4* applicationSwapChain = gfx.swapChain();
+      if (applicationSwapChain) applicationSwapChain->AddRef();
+      gfx.releaseSwapChainForWrap();
+      IDXGISwapChain4* wrappedSwapChain = nullptr;
+      fgOk = xeMfg.init(gfx.device(), display, applicationSwapChain, gfx.queue(), &wrappedSwapChain);
+      if (applicationSwapChain) applicationSwapChain->Release();
+      if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
+        fgOk = false;
+        gfx.releaseSwapChainForWrap();
+        xeMfg.shutdown();
+        logMain(L"XeSS MFG wrapped swapchain adoption failed");
+      }
+      if (wrappedSwapChain) wrappedSwapChain->Release();
+      logMain(fgOk ? L"XeSS MFG init OK: " + xeMfg.lastError()
+                   : L"XeSS MFG init FAILED: " + xeMfg.lastError());
+    } else {
+      IDXGISwapChain4* fgSwapChain = gfx.swapChain();
+      if (fgSwapChain) fgSwapChain->AddRef();
+      gfx.releaseSwapChainForWrap();
+      fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
+      logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError()
+                   : L"FSR frame generation init FAILED: " + fg.lastError());
+      if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
+        fg.shutdown();
+        fgOk = false;
+        logMain(L"FSR FG wrapped swapchain adoption failed");
+      }
     }
     if (!fgOk) {
-      // Failed wrap/context creation may have consumed or invalidated the
-      // original DXGI swapchain pointer. Recreate a clean ordinary swapchain
-      // so capture/upscaling remain usable without frame generation.
       if (!gfx.rebuildSwapChain(display))
-        throw std::runtime_error("could not rebuild DXGI swapchain after FSR FG initialization failed");
-      logMain(L"Ordinary swapchain rebuilt after FSR FG failure");
+        throw std::runtime_error("could not rebuild DXGI swapchain after frame-generation initialization failed");
+      logMain(L"Ordinary swapchain rebuilt after frame-generation initialization failure");
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
-      printCli(fgOk ? fg.lastError() : L"FSR FG unavailable: " + fg.lastError());
+      printCli(fgOk ? (xeMfgSelected ? xeMfg.lastError() : fg.lastError())
+                    : (xeMfgSelected ? L"XeSS MFG unavailable: " + xeMfg.lastError()
+                                     : L"FSR FG unavailable: " + fg.lastError()));
     }
 
     FrameLimiter frameLimiter;
@@ -525,7 +544,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       lastCs = cs;
       setScaleSizes(cs, display);
       if (!gfx.ensureAuxTextures(cs)) throw std::runtime_error("auxiliary graphics textures could not be resized");
-      if (fgOk && (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
+      if (!xeMfgSelected && fgOk && (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
         gfx.waitForGpu();
         const bool resizedFg = fg.resize(cs, display);
         fgMaxRender = cs;
@@ -774,7 +793,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
           }
           cmd->ResourceBarrier(2, toRead);
-          fgPrepared = fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
+          fgPrepared = xeMfgSelected
+              ? xeMfg.prepare(cmd, depth, mv, cs, dt, resetThisFrame, true, overlayXeMfgMultiplier())
+              : fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
           D3D12_RESOURCE_BARRIER toWrite[2]{};
           for (int i = 0; i < 2; ++i) {
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -786,18 +807,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           }
           cmd->ResourceBarrier(2, toWrite);
         } else {
-          fgPrepared = fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
+          fgPrepared = xeMfgSelected
+              ? xeMfg.prepare(cmd, nullptr, nullptr, cs, dt, resetThisFrame, false, overlayXeMfgMultiplier())
+              : fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
         }
         if (!fgPrepared && runFgThisFrame) {
           fgEnabled = false;
           overlaySetFgEnabled(false);
           if (cliMode && hasConsole())
             printCli(L"FSR FG disabled after prepare failure: " + fg.lastError());
-          setStatus(out, fg.lastError().c_str());
+          const std::wstring& fgError = xeMfgSelected ? xeMfg.lastError() : fg.lastError();
+          setStatus(out, fgError.c_str());
         }
       }
 
-      overlaySetFgActive(runFgThisFrame && fgPrepared && !fg.failed());
+      overlaySetFgActive(runFgThisFrame && fgPrepared &&
+                         (xeMfgSelected ? !xeMfg.failed() : !fg.failed()));
 
       const float clear[4] = { 0, 0, 0, 1 };
       cmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
@@ -840,13 +865,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
       gfx.present();
+      if (xeMfgSelected && fgOk)
+        xeMfg.afterPresent(); // XeLL paces NRLive's next captured frame.
       openNr.retire(); // its consumer list went with Present
-      if (fgOk && fg.failed()) {
+      const bool fgFailed = fgOk && (xeMfgSelected ? xeMfg.failed() : fg.failed());
+      if (fgFailed) {
         fgEnabled = false;
         overlaySetFgEnabled(false);
+        const std::wstring& fgError = xeMfgSelected ? xeMfg.lastError() : fg.lastError();
         if (cliMode && hasConsole())
-          printCli(L"FSR FG disabled after generation failure: " + fg.lastError());
-        setStatus(out, fg.lastError().c_str());
+          printCli((xeMfgSelected ? L"XeSS MFG" : L"FSR FG") + std::wstring(L" disabled after generation failure: ") + fgError);
+        setStatus(out, fgError.c_str());
       }
       QueryPerformanceCounter(&renderEnd);
       const double acquireMs = (acquireEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart);
@@ -915,7 +944,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     openNr.shutdown();
     fastmv.shutdown();
     amdof.shutdown();
-    fg.shutdown();
+    if (xeMfgSelected && fgOk) {
+      // XeSS owns the wrapped DXGI chain; release NRLive's backbuffer references
+      // before destroying its swapchain context (otherwise it reports pointer-in-use).
+      gfx.releaseSwapChainForWrap();
+      xeMfg.shutdown();
+    } else {
+      fg.shutdown();
+    }
     fsr.shutdown();
     overlayShutdown();
     cap.stop();
