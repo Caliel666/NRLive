@@ -117,7 +117,7 @@ UINT adapterVendor(ID3D12Device* device)
     ComPtr<IDXGIFactory4> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     ComPtr<IDXGIAdapter1> adapter;
-    if (FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), &adapter))) return 0;
+    if (FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter)))) return 0;
     DXGI_ADAPTER_DESC1 desc{};
     return SUCCEEDED(adapter->GetDesc1(&desc)) ? desc.VendorId : 0;
 }
@@ -219,6 +219,8 @@ public:
         }
     }
 };
+
+XeMfgFrameGeneration::XeMfgFrameGeneration() = default;
 
 XeMfgFrameGeneration::~XeMfgFrameGeneration()
 {
