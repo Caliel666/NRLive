@@ -31,6 +31,14 @@ xess/
 
 The first implementation is deliberately AMD-only (PCI vendor ID \`0x1002\`) and D3D12-only. It validates the loaded XeSS pair against the supported private runtime layouts before applying any in-memory patches. Unsupported runtimes fail closed and NRLive rebuilds an ordinary output swapchain; the FSR backend and capture pipeline remain available.
 
+## Intel license limitation
+
+The official XeSS SDK `LICENSE.txt` permits redistribution of its binaries only without modification, and says that reverse engineering or modifying the software or its operation during execution is not permitted. This AMD compatibility route uses private runtime-layout discovery and patches XeSS runtime code in memory. Therefore, **this experimental route is not authorized by the standard public XeSS SDK license alone**. Use it only if you have separate permission or another valid authorization from Intel covering this specific use. Having your own copy of the DLLs does not by itself grant that permission.
+
+The MFG Unlocker release notice also states that some embedded DXIL programs are derived from Intel XeSS programs and modified, and remain subject to Intel's license. NRLive does not redistribute those resources: the MFG Unlocker DLL is supplied separately by the user and is read as a resource-only module. This does not remove the license limitation above.
+
+This is a technical prototype, not an Intel-supported integration or a statement that the compatibility patches are permitted under the standard SDK terms.
+
 ## Selecting a backend
 
 Open Settings → General → Frame Generation:
