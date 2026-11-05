@@ -821,9 +821,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         }
       }
 
-      overlaySetFgActive(runFgThisFrame && fgPrepared &&
-                         (xeMfgSelected ? !xeMfg.failed() : !fg.failed()));
-
       const float clear[4] = { 0, 0, 0, 1 };
       cmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
       gfx.blitToBackbuffer(presentSrc);
@@ -865,8 +862,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
       gfx.present();
-      if (xeMfgSelected && fgOk)
-        xeMfg.afterPresent(); // XeLL paces NRLive's next captured frame.
+      const bool xeMfgGenerated = xeMfgSelected && fgOk ? xeMfg.afterPresent() : false;
+      overlaySetFgActive(runFgThisFrame && fgPrepared &&
+                         (xeMfgSelected ? xeMfgGenerated : !fg.failed()));
       openNr.retire(); // its consumer list went with Present
       const bool fgFailed = fgOk && (xeMfgSelected ? xeMfg.failed() : fg.failed());
       if (fgFailed) {
