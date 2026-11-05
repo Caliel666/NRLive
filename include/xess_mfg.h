@@ -15,7 +15,7 @@ public:
     bool prepare(ID3D12GraphicsCommandList* commandList, ID3D12Resource* depth,
                  ID3D12Resource* motionVectors, Size render, float frameTimeMs,
                  bool reset, bool enabled, uint32_t multiplier);
-    void afterPresent() noexcept;
+    bool afterPresent() noexcept;
     void shutdown() noexcept;
     bool ready() const noexcept { return m_context != nullptr; }
     bool failed() const noexcept { return m_failed; }
