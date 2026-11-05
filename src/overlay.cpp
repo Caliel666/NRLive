@@ -68,8 +68,8 @@ static void loadCfg() {
   g_frameLimit.fps = frame_limit::clampFps(GetPrivateProfileIntW(L"FrameLimiter", L"fps", 60, ini.c_str()));
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
-  g_fgBackend = std::clamp(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str()), 0, 1);
-  g_xeMfgMultiplier = std::clamp(GetPrivateProfileIntW(L"FrameGeneration", L"multiplier", 3, ini.c_str()), 2, 6);
+  g_fgBackend = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str())), 0, 1);
+  g_xeMfgMultiplier = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"multiplier", 3, ini.c_str())), 2, 6);
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
