@@ -406,21 +406,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     XeMfgFrameGeneration xeMfg;
     bool fgOk = false;
     if (xeMfgSelected) {
-      logMain(L"XeSS MFG selected; application swapchain handoff begin");
-      IDXGISwapChain4* applicationSwapChain = gfx.swapChain();
-      logMain(applicationSwapChain ? L"XeSS MFG application swapchain acquired"
-                                   : L"XeSS MFG ERROR: application swapchain is null");
-      if (applicationSwapChain) applicationSwapChain->AddRef();
+      logMain(L"XeSS MFG selected; descriptor-based swapchain handoff begin");
+      DXGI_SWAP_CHAIN_DESC1 xeMfgSwapChainDesc{};
+      IDXGIFactory2* dxgiFactory = gfx.factory();
+      if (!dxgiFactory || !gfx.swapChainDescription(xeMfgSwapChainDesc))
+        throw std::runtime_error("could not query the DXGI factory or swapchain descriptor for XeSS MFG");
+      logMain(L"XeSS MFG app descriptor captured: " +
+              std::to_wstring(xeMfgSwapChainDesc.BufferCount) + L" backbuffers");
+      // InitFromSwapChainDesc requires no existing swapchain associated with
+      // this HWND. XeSS creates a fresh proxy chain; its internal native chain
+      // receives the scoped 8-buffer MFG queue during initialization.
       gfx.releaseSwapChainForWrap();
-      logMain(L"XeSS MFG released Graphics-owned swapchain references");
+      logMain(L"XeSS MFG released the original application swapchain");
       IDXGISwapChain4* wrappedSwapChain = nullptr;
-      logMain(L"XeSS MFG initialization call begin");
-      fgOk = xeMfg.init(gfx.device(), display, applicationSwapChain, gfx.queue(), &wrappedSwapChain);
-      if (applicationSwapChain) {
-        logMain(L"XeSS MFG releasing application swapchain reference not consumed by initialization");
-        applicationSwapChain->Release();
-        applicationSwapChain = nullptr;
-      }
+      logMain(L"XeSS MFG descriptor initialization call begin");
+      fgOk = xeMfg.init(gfx.device(), display, out, dxgiFactory,
+                        xeMfgSwapChainDesc, gfx.queue(), &wrappedSwapChain);
       logMain(fgOk ? L"XeSS MFG initialization call returned success"
                    : L"XeSS MFG initialization call returned failure: " + xeMfg.lastError());
       if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
