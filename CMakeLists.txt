@@ -29,6 +29,25 @@ foreach(_include "${FFX_INCLUDE_API}" "${FFX_INCLUDE_FG}" "${FFX_INCLUDE_UPSCALE
   endif()
 endforeach()
 
+# Intel XeSS 3.0.2 public D3D12/XeLL headers. Runtime DLLs and the AMD
+# compatibility resource pack are user-provided and are never bundled.
+set(XESS_SDK_ROOT "" CACHE PATH "Extracted Intel XeSS SDK 3.0.2 root")
+if(NOT XESS_SDK_ROOT)
+  message(FATAL_ERROR "Set -DXESS_SDK_ROOT= to the extracted Intel XeSS SDK 3.0.2 root.")
+endif()
+get_filename_component(XESS_SDK_ROOT "${XESS_SDK_ROOT}" ABSOLUTE)
+set(XESS_INCLUDE_FG "${XESS_SDK_ROOT}/inc/xess_fg")
+set(XESS_INCLUDE_LL "${XESS_SDK_ROOT}/inc/xell")
+foreach(_include "${XESS_INCLUDE_FG}" "${XESS_INCLUDE_LL}")
+  if(NOT EXISTS "${_include}")
+    message(FATAL_ERROR "XeSS SDK 3.0.2 include directory missing: ${_include}")
+  endif()
+endforeach()
+if(NOT EXISTS "${XESS_INCLUDE_FG}/xefg_swapchain_d3d12.h" OR
+   NOT EXISTS "${XESS_INCLUDE_LL}/xell_d3d12.h")
+  message(FATAL_ERROR "XeSS SDK 3.0.2 D3D12/XeLL headers are incomplete.")
+endif()
+
 set(_FFX_DLL_SEARCH_PATHS "${FFX_BIN}" "${FFX_SDK}/PrebuiltSignedDLL"
     "${FFX_SDK}/Kits/FidelityFX/bin" "${FFX_SDK}/bin")
 find_file(FFX_DLL_LOADER NAMES amd_fidelityfx_loader_dx12.dll
@@ -50,6 +69,8 @@ add_executable(NRLive WIN32
   src/graphics.cpp
   src/capture.cpp
   src/fsr.cpp
+  src/xess_mfg.cpp
+  third_party/xess_mfg/runtime_payload.cpp
   src/dlssnr.cpp
   src/dlssnr_stabilizer.cpp
   src/opennr.cpp
@@ -72,6 +93,9 @@ target_include_directories(NRLive PRIVATE
   "${FFX_INCLUDE_API}"
   "${FFX_INCLUDE_FG}"
   "${FFX_INCLUDE_UPSCALER}"
+  "${XESS_INCLUDE_FG}"
+  "${XESS_INCLUDE_LL}"
+  "${CMAKE_SOURCE_DIR}/third_party/xess_mfg"
   "${CMAKE_SOURCE_DIR}/include"
   "${CMAKE_SOURCE_DIR}/third_party/opennr"
 )
@@ -81,7 +105,7 @@ target_compile_definitions(NRLive PRIVATE
 )
 
 target_link_libraries(NRLive PRIVATE
-  d3d11 d3d12 dxgi dxguid windowsapp shcore d3dcompiler dwmapi gdi32 windowscodecs shell32 ole32 comdlg32 gdiplus pdh
+  d3d11 d3d12 dxgi dxguid windowsapp shcore d3dcompiler dwmapi gdi32 windowscodecs shell32 ole32 comdlg32 gdiplus pdh bcrypt
 )
 
 set_target_properties(NRLive PROPERTIES
