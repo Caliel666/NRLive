@@ -448,17 +448,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         throw std::runtime_error("could not rebuild DXGI swapchain after frame-generation initialization failed");
       logMain(L"Ordinary swapchain rebuilt after frame-generation initialization failure");
     }
-    // An explicit --fg selection means "run this frame-generation backend"
-    // for this launch. Keep this override transient; do not silently rewrite
-    // the user's saved overlay toggle.
-    bool fgEnabled = fgOk && (spec.frameGenerationBackendExplicit || overlayFgEnabled());
-    if (spec.frameGenerationBackendExplicit) {
-      overlaySetFgEnabledTransient(fgEnabled);
-      logMain(fgEnabled ? L"Frame generation enabled for this launch by explicit --fg selection"
-                        : L"Explicit --fg backend selected, but initialization failed");
-    } else {
-      overlaySetFgEnabled(fgEnabled);
-    }
+    // --fg selects only the backend. The persisted overlay setting owns
+    // the enabled/disabled state independently of backend selection.
+    bool fgEnabled = fgOk && overlayFgEnabled();
+    overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
       printCli(fgOk ? (xeMfgSelected ? xeMfg.lastError() : fg.lastError())
