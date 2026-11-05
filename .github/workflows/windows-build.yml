@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "main"
+      - "feature/xess-mfg-amd"
     tags:
       - "*"
   pull_request:
