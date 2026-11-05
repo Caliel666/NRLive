@@ -1072,8 +1072,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           const double samples = static_cast<double>(xeCpuProfileSamples);
           const double sourceFps = xeSourceIntervalTotalMs > 0.001
               ? samples * 1000.0 / xeSourceIntervalTotalMs : 0.0;
+          const uint32_t outputFramesPerSource = xeMfg.framesPresented();
+          const double queuedOutputFps = sourceFps * outputFramesPerSource;
           logMain(L"XeMFG CPU profile samples=" + std::to_wstring(xeCpuProfileSamples) +
               L" source_fps=" + std::to_wstring(sourceFps) +
+              L" queued_frames_per_source=" + std::to_wstring(outputFramesPerSource) +
+              L" queued_output_fps_estimate=" + std::to_wstring(queuedOutputFps) +
               L" capture_queue_wait_avg/max_ms=" + std::to_wstring(xeCaptureWaitCpu.average(xeCpuProfileSamples)) +
               L"/" + std::to_wstring(xeCaptureWaitCpu.maxMs) +
               L" gfx_begin_avg/max_ms=" + std::to_wstring(xeBeginCpu.average(xeCpuProfileSamples)) +
