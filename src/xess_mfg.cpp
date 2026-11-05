@@ -52,8 +52,6 @@ namespace {
 constexpr const char* kXeFgName = "libxess_fg.dll";
 constexpr const char* kXeLlName = "libxell.dll";
 constexpr const char* kPayloadName = "MFGUnlocker.dll";
-constexpr const char* kSdk302FgHash = "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27";
-constexpr const char* kSdk302LlHash = "d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7";
 
 std::filesystem::path executableDirectory()
 {
@@ -190,8 +188,7 @@ struct XeMfgFrameGeneration::Api
     }
 };
 
-namespace {
-class XeMfgPatches
+struct XeMfgPatches
 {
 public:
     std::unique_ptr<ModelPort> model;
@@ -217,7 +214,6 @@ public:
         }
     }
 };
-}
 
 XeMfgFrameGeneration::~XeMfgFrameGeneration()
 {
@@ -256,8 +252,6 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display,
         const auto fgHash = hashFile(fgPath);
         const auto llHash = hashFile(llPath);
         logEvent("runtime_hashes", "\"libxess_fg\":\"" + fgHash + "\",\"libxell\":\"" + llHash + "\"");
-        if (fgHash != kSdk302FgHash || llHash != kSdk302LlHash)
-            throw std::runtime_error("unsupported_runtime_pair_expected_XeSS_SDK_3.0.2");
         if (!xess_layout::Pair(m_api->fgModule, m_api->llModule))
             throw std::runtime_error("runtime_instruction_layout_not_supported");
         if (!m_api->resolve()) throw std::runtime_error("runtime_exports_missing");
