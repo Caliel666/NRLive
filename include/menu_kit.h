@@ -53,6 +53,7 @@ public:
   void row(int n);
 
   bool dragging() const { return m_active != 0; }
+  bool takeHoverChanged();
   // Client height that shows the whole body, from the last pass.
   int wantedHeight() const;
 
