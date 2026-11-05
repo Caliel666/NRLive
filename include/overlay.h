@@ -64,6 +64,8 @@ bool overlayConsumeDlssNrToggle();            // returns true once when the NR b
 const OverlayDlssNrConfig& overlayDlssNrConfig();
 void overlaySetDlssNrEnabled(bool enabled);
 bool overlayFgEnabled();
+int overlayFgBackend();             // 0=FSR, 1=XeSS MFG; selected at startup
+int overlayXeMfgMultiplier();       // 2x..6x output multiplier
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);
