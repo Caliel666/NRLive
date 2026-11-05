@@ -510,7 +510,7 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
                 m_error = L"XeSS MFG: XeLL marker failed (" +
                           std::to_wstring(static_cast<int>(result)) + L")";
                 logEvent("xell_marker_failed",
-                    "\"marker\":\"" + name + "\",\"result\":" +
+                    "\"marker\":\"" + std::string("\\"marker\\":\\"") + name + "\",\"result\":" +
                     std::to_string(static_cast<int>(result)) +
                     ",\"present_id\":" + std::to_string(id));
                 break;
