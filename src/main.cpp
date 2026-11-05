@@ -426,7 +426,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       pollBindBypass(out, spec);
       overlayConsumeFrameLimitToggle();
       const auto limitCfg = overlayFrameLimitConfig();
-      frameLimiter.configure(limitCfg.enabled, limitCfg.fps, limitCfg.method);
+      frameLimiter.configure(!xeMfgSelected && limitCfg.enabled, limitCfg.fps, limitCfg.method);
       if (overlayConsumeFsrToggle() && pipelineOk) {
         fsrEnabled = !fsrEnabled;
         overlaySetFsrEnabled(fsrEnabled);
@@ -815,7 +815,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           fgEnabled = false;
           overlaySetFgEnabled(false);
           if (cliMode && hasConsole())
-            printCli(L"FSR FG disabled after prepare failure: " + fg.lastError());
+            printCli((xeMfgSelected ? L"XeSS MFG" : L"FSR FG") + std::wstring(L" disabled after prepare failure: ") + (xeMfgSelected ? xeMfg.lastError() : fg.lastError()));
           const std::wstring& fgError = xeMfgSelected ? xeMfg.lastError() : fg.lastError();
           setStatus(out, fgError.c_str());
         }
