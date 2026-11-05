@@ -414,8 +414,8 @@ static void openNrTab(kit::Panel& p, OpenNrSettings& s) {
     c |= p.slider(L"Intensity", &s.MochizukiRenoIntensity, 0.0f, 2.0f, L"%.2f", L"The model's intensity.");
     c |= p.slider(L"Local tone", &s.MochizukiRenoLocalTone, 0.0f, 2.0f, L"%.2f", L"The model's local lighting.");
     c |= p.slider(L"Structure", &s.MochizukiRenoLocalStructure, 0.0f, 2.0f, L"%.2f", L"The model's structure strength.");
-    c |= p.slider(L"Skin structure", &s.MochizukiRenoSkinStructure, 0.0f, 2.0f, L"%.2f",
-      L"Structure on skin, 0 to 2 (1 is the model's default). Needs the auto mask.");
+    c |= p.slider(L"Skin structure", &s.MochizukiRenoSkinStructure, 0.0f, 1.0f, L"%.2f",
+      L"Structure on skin, 0 to 1 (1 is the default; the runtime stops at 1). Needs the auto mask.");
     c |= p.checkbox(L"Auto mask", &s.MochizukiRenoAutoMask, L"The model's character mask, so skin gets its own structure.");
     c |= p.checkbox(L"Independent skin", &s.MochizukiRenoSkinIndependent,
       L"With the mask: structure is sent at most 1 and skin as 1, so structure no longer moves faces.");
