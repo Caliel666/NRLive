@@ -16,7 +16,7 @@ public:
     // its internal native presentation chain's buffer count.
     bool init(ID3D12Device* device, Size display, HWND output, IDXGIFactory2* factory,
               const DXGI_SWAP_CHAIN_DESC1& swapChainDesc, ID3D12CommandQueue* queue,
-              IDXGISwapChain4** wrappedSwapChain);
+              bool native2xModel, IDXGISwapChain4** wrappedSwapChain);
     bool prepare(ID3D12GraphicsCommandList* commandList, ID3D12Resource* depth,
                  ID3D12Resource* motionVectors, Size render, float frameTimeMs,
                  bool reset, bool enabled, uint32_t multiplier);
@@ -40,6 +40,7 @@ private:
     uint32_t m_frameId = 0;
     uint32_t m_multiplier = 2;
     uint32_t m_framesPresented = 1;
+    bool m_native2xModel = false;
     bool m_active = false;
     bool m_failed = false;
     bool m_xellFailed = false;
