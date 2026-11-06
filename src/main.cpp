@@ -406,7 +406,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     XeMfgFrameGeneration xeMfg;
     bool fgOk = false;
     if (xeMfgSelected) {
-      logMain(L"XeSS MFG selected; descriptor-based swapchain handoff begin");
+      const bool native2xModel = overlayXeMfgNative2xModel();
+      logMain(native2xModel
+          ? L"XeSS MFG selected; native 2x-only model route"
+          : L"XeSS MFG selected; ported MFG model route (2x-6x)");
       DXGI_SWAP_CHAIN_DESC1 xeMfgSwapChainDesc{};
       IDXGIFactory2* dxgiFactory = gfx.factory();
       if (!dxgiFactory || !gfx.swapChainDescription(xeMfgSwapChainDesc))
@@ -421,7 +424,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       IDXGISwapChain4* wrappedSwapChain = nullptr;
       logMain(L"XeSS MFG descriptor initialization call begin");
       fgOk = xeMfg.init(gfx.device(), display, out, dxgiFactory,
-                        xeMfgSwapChainDesc, gfx.queue(), &wrappedSwapChain);
+                        xeMfgSwapChainDesc, gfx.queue(), native2xModel, &wrappedSwapChain);
       logMain(fgOk ? L"XeSS MFG initialization call returned success"
                    : L"XeSS MFG initialization call returned failure: " + xeMfg.lastError());
       if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
