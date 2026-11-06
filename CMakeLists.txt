@@ -197,4 +197,7 @@ if(BUILD_TESTING)
       "$<TARGET_FILE_DIR:NRLive>/xess/libxell.dll"
       "$<TARGET_FILE_DIR:NRLive>/xess/MFGUnlocker.dll"
   )
+  add_executable(xess_mfg_model_policy_test tests/xess_mfg_model_policy_test.cpp)
+  target_include_directories(xess_mfg_model_policy_test PRIVATE "${CMAKE_SOURCE_DIR}/include")
+  add_test(NAME xess_mfg_model_route_and_multiplier_policy COMMAND xess_mfg_model_policy_test)
 endif()
