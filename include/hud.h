@@ -11,6 +11,7 @@ struct HudFrame {
   float sourceMs = 0;          // interval between captured frames
   Size capture{}, output{};
   bool fsr = false, nr = false, fg = false;
+  uint32_t fgMultiplier = 2;
   NrBuild nrBuild;
   float latencyMs = -1;        // frame acquired -> present call
   float gpuMotionMs = -1, gpuNrMs = -1, gpuFsrMs = -1, gpuTotalMs = -1;

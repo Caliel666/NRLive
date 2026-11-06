@@ -643,13 +643,15 @@ static bool writeScreenshotPng(const std::wstring& folder,
   return ok;
 }
 
-bool Graphics::present()
+bool Graphics::present(void (*afterSubmitBeforePresent)(void*), void* callbackContext)
 {
   // submitForInterop() may have already submitted m_cmd and continued the
   // frame on m_cmdContinuation. Present must execute the currently active
   // list, not replay the already-submitted original list.
   ID3D12CommandList* lists[] = { cmd() };
   m_queue->ExecuteCommandLists(1, lists);
+  if (afterSubmitBeforePresent)
+    afterSubmitBeforePresent(callbackContext);
 
   // Fence the allocator slot BEFORE Present. FSR FG submits generation work
   // inside Present on the same queue; that work does not use m_alloc[slot].

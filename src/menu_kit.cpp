@@ -1,5 +1,6 @@
 #include "menu_kit.h"
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <cwchar>
 #include <string>
@@ -64,6 +65,16 @@ struct Panel::Impl {
   std::wstring tip;
   RECT tipAnchor{};
   bool off = false;
+  bool interactionPass = false;
+  bool hoverChanged = false;
+  std::vector<uint8_t> eventHover;
+  std::vector<uint8_t> previousHover;
+
+  void recordHover(bool hovered)
+  {
+    if (interactionPass)
+      eventHover.push_back(hovered ? 1u : 0u);
+  }
   float drag = 0; // an on-release slider's value while it is held
   float fontScale = 0;
   std::unique_ptr<Font> font, bold, title, note;
@@ -157,6 +168,7 @@ struct Panel::Impl {
     const int d = px(14);
     RECT r{ row.right - d, (row.top + row.bottom - d) / 2, row.right, (row.top + row.bottom + d) / 2 };
     const bool over = hit(off ? row : r);
+    recordHover(over);
     if (over) { tip = t; tipAnchor = r; }
     if (!g) return;
     Pen pen(over ? kAccentReadable : kDim, 1.2f * s);
@@ -167,8 +179,9 @@ struct Panel::Impl {
   // Click behaviour shared by every widget.
   bool behave(int id, const RECT& r, int& active, bool& hovered, bool& held)
   {
-    if (off) { hovered = held = false; return false; }
+    if (off) { hovered = held = false; recordHover(false); return false; }
     hovered = hit(r) && (active == 0 || active == id);
+    recordHover(hovered);
     bool clicked = false;
     if (!g) {
       if (in.pressed && hovered) active = id;
@@ -189,6 +202,8 @@ void Panel::begin(HDC dc, const RECT& client, float scale, const Input& in)
   m->s = scale;
   m->in = in;
   m->seq = 0;
+  m->interactionPass = (dc == nullptr);
+  if (m->interactionPass) m->eventHover.clear();
   m->inBody = false;
   m->rowN = 0;
   m->off = false;
@@ -249,7 +264,14 @@ void Panel::end()
     RECT tr = r; InflateRect(&tr, -pad, -pad);
     d.g->DrawString(d.tip.c_str(), -1, d.note.get(), toF(tr), &sf, &b);
   }
+  if (d.interactionPass) {
+    d.hoverChanged = d.eventHover != d.previousHover;
+    d.previousHover = d.eventHover;
+  } else {
+    d.hoverChanged = false;
+  }
   if (!d.g && d.in.released) m_active = 0;
+  d.interactionPass = false;
   d.g = nullptr;
   d.gfx.reset();
 }
@@ -314,6 +336,13 @@ int Panel::wantedHeight() const
 {
   const auto& d = *m;
   return (d.body.top - d.client.top) + (int)d.contentH + d.px(24);
+}
+
+bool Panel::takeHoverChanged()
+{
+  const bool changed = m->hoverChanged;
+  m->hoverChanged = false;
+  return changed;
 }
 
 bool Panel::isCaption(POINT p) const

@@ -73,6 +73,81 @@ jobs:
           Write-Host "FSR SDK root: $($sdk.FullName)"
           Write-Host "FSR runtime folder: $binRoot"
 
+      - name: Download Intel XeSS SDK 3.0.2 headers and x64 runtimes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/intel/xess/releases/download/v3.0.2/XeSS_SDK_3.0.2.zip"
+          $expectedSha256 = "88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990"
+          $zip = Join-Path $env:RUNNER_TEMP "xess-sdk-3.0.2.zip"
+          $root = Join-Path $env:RUNNER_TEMP "xess-sdk-3.0.2"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          curl.exe -L --fail --retry 5 --retry-delay 3 --output $zip $url
+          $actualSha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "XeSS SDK 3.0.2 archive SHA-256 mismatch: $actualSha256"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          $header = Get-ChildItem -Path $root -Recurse -File -Filter "xefg_swapchain_d3d12.h" | Select-Object -First 1
+          if (-not $header) { throw "XeSS SDK D3D12 Frame Generation header missing." }
+          $xessRoot = Split-Path (Split-Path (Split-Path $header.FullName -Parent) -Parent) -Parent
+          foreach ($relative in @("inc/xess_fg/xefg_swapchain_d3d12.h", "inc/xell/xell_d3d12.h")) {
+            if (-not (Test-Path (Join-Path $xessRoot $relative))) { throw "XeSS SDK header missing: $relative" }
+          }
+          "XESS_SDK_ROOT=$xessRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Collect the unmodified x64 runtime DLLs for the final NRLive package.
+          # The archive SHA-256 checks above pin the exact upstream inputs.
+          function Get-PeMachine([string]$Path) {
+            $stream = [System.IO.File]::OpenRead($Path)
+            try {
+              $reader = [System.IO.BinaryReader]::new($stream)
+              if ($reader.ReadUInt16() -ne 0x5A4D) { throw "Invalid PE image: $Path" }
+              $stream.Position = 0x3c
+              $peOffset = $reader.ReadInt32()
+              if ($peOffset -lt 64 -or $peOffset -gt ($stream.Length - 6)) { throw "Invalid PE header offset: $Path" }
+              $stream.Position = $peOffset
+              if ($reader.ReadUInt32() -ne 0x00004550) { throw "Invalid PE signature: $Path" }
+              return $reader.ReadUInt16()
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
+          $xessRuntime = Join-Path $env:RUNNER_TEMP "xess-runtime"
+          New-Item -ItemType Directory -Force $xessRuntime | Out-Null
+          foreach ($dllName in @("libxess_fg.dll", "libxell.dll")) {
+            $candidates = @(Get-ChildItem -Path $root -Recurse -File -Filter $dllName)
+            $found = $null
+            foreach ($candidate in $candidates) {
+              if ((Get-PeMachine $candidate.FullName) -eq 0x8664) {
+                $found = $candidate
+                break
+              }
+            }
+            if (-not $found) { throw "Official XeSS SDK 3.0.2 x64 runtime DLL missing: $dllName" }
+            Copy-Item -LiteralPath $found.FullName -Destination (Join-Path $xessRuntime $dllName) -Force
+            Write-Host "$dllName => $($found.FullName)"
+          }
+
+          $unlockerUrl = "https://github.com/dashdogy/MFG-Unlocker/releases/download/v1.7.0/MFGUnlocker-v1.7.0.zip"
+          $unlockerSha256 = "5bd19d03288e1ece1d0bb2030ac072b36758045028da192044dcaad73fd901dd"
+          $unlockerZip = Join-Path $env:RUNNER_TEMP "mfg-unlocker-v1.7.0.zip"
+          $unlockerRoot = Join-Path $env:RUNNER_TEMP "mfg-unlocker-v1.7.0"
+          curl.exe -L --fail --retry 5 --retry-delay 3 --output $unlockerZip $unlockerUrl
+          $actualUnlockerSha256 = (Get-FileHash -LiteralPath $unlockerZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualUnlockerSha256 -ne $unlockerSha256) {
+            throw "MFG Unlocker v1.7.0 archive SHA-256 mismatch: $actualUnlockerSha256"
+          }
+          New-Item -ItemType Directory -Force $unlockerRoot | Out-Null
+          Expand-Archive -LiteralPath $unlockerZip -DestinationPath $unlockerRoot -Force
+          $unlockerDll = Get-ChildItem -Path $unlockerRoot -Recurse -File -Filter "MFGUnlocker.dll" | Select-Object -First 1
+          if (-not $unlockerDll) { throw "MFG Unlocker v1.7.0 archive does not contain MFGUnlocker.dll." }
+          if ((Get-PeMachine $unlockerDll.FullName) -ne 0x8664) { throw "MFGUnlocker.dll is not x64." }
+          Copy-Item -LiteralPath $unlockerDll.FullName -Destination (Join-Path $xessRuntime "MFGUnlocker.dll") -Force
+          "XESS_RUNTIME_DIR=$xessRuntime" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "XeSS MFG runtime inputs validated: $xessRuntime"
+
       - name: Download OpenNR DLSSNR runtime from Hugging Face (pinned SHA-256, no model weights)
         shell: pwsh
         run: |
@@ -85,13 +160,28 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
+          cmake -S . -B build -A x64 -DFFX_SDK="$env:FFX_SDK" -DFFX_BIN="$env:FFX_BIN" -DXESS_SDK_ROOT="$env:XESS_SDK_ROOT" -DOPENNR_RUNTIME="$env:OPENNR_RUNTIME" -DBUILD_TESTING=ON
 
       - name: Build Release
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           cmake --build build --config Release --parallel
+
+      - name: Stage XeSS MFG runtime for CI path validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $destination = "build/Release/xess"
+          New-Item -ItemType Directory -Force $destination | Out-Null
+          foreach ($dllName in @("libxess_fg.dll", "libxell.dll", "MFGUnlocker.dll")) {
+            $source = Join-Path $env:XESS_RUNTIME_DIR $dllName
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Downloaded XeSS runtime DLL is missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $destination $dllName) -Force
+          }
+          Get-ChildItem $destination | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Run tests
         shell: pwsh
@@ -108,6 +198,9 @@ jobs:
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
             "amd_fidelityfx_upscaler_dx12.dll",
+            "xess/libxess_fg.dll",
+            "xess/libxell.dll",
+            "xess/MFGUnlocker.dll",
             "opennr/MochizukiNrRuntime.dll",
             "opennr/dlssnr-amd/shaders",
             "opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt"
@@ -125,7 +218,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force $package | Out-Null
 
-          # Package the native NRLive executable and its staged runtime files.
+          # Package NRLive with the pinned, unmodified XeSS MFG runtime DLLs in xess/.
           Copy-Item "build/Release/*" $package -Recurse -Force
 
           # Test binaries are needed by CTest in build/Release, but must never ship.
@@ -143,6 +236,9 @@ jobs:
           Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
           Copy-Item "$package/opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt" "$package/DLSSNR-AMD-LICENSE.txt" -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
+          Copy-Item "docs/XESS-MFG-SETUP.md" "$package/XESS-MFG-SETUP.md" -Force
+          Copy-Item "third_party/xess_mfg/MFG-UNLOCKER-LICENSE.txt" "$package/MFG-UNLOCKER-LICENSE.txt" -Force
+          Copy-Item "third_party/xess_mfg/XEFG-PROGRAMS-NOTICE.txt" "$package/XEFG-PROGRAMS-NOTICE.txt" -Force
           Copy-Item "version.txt" "$package/version.txt" -Force
 
           foreach ($file in @(
@@ -150,6 +246,9 @@ jobs:
             "amd_fidelityfx_loader_dx12.dll",
             "amd_fidelityfx_framegeneration_dx12.dll",
             "amd_fidelityfx_upscaler_dx12.dll",
+            "xess/libxess_fg.dll",
+            "xess/libxell.dll",
+            "xess/MFGUnlocker.dll",
             "opennr/MochizukiNrRuntime.dll",
             "opennr/dlssnr-amd/shaders",
             "DLSSNR-AMD-LICENSE.txt",

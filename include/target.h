@@ -5,6 +5,7 @@
 #include "upscaler.h"
 
 enum class TargetMode { Picker, Pid, Window, Process };
+enum class FrameGenerationBackend { Fsr, XeMfg };
 
 struct TargetSpec {
   TargetMode mode = TargetMode::Picker;
@@ -21,6 +22,8 @@ struct TargetSpec {
   MotionMode motionMode = MotionMode::Fast;
   std::wstring motionModeText = L"fast";
   UpscalerKind upscaler = UpscalerKind::Fsr4;
+  FrameGenerationBackend frameGenerationBackend = FrameGenerationBackend::Fsr;
+  bool frameGenerationBackendExplicit = false;
   // Optional CSV trace for comparing capture, render CPU, and present cadence.
   std::wstring tracePath;
   UINT stopHotkeyModifiers = MOD_CONTROL | MOD_SHIFT;

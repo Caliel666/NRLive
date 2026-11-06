@@ -40,6 +40,9 @@ static bool g_initialized = false;
 static bool g_toggleFsr = false, g_screenshot = false, g_toggleFrameLimit = false, g_toggleFg = false;
 static OverlayFrameLimitConfig g_frameLimit{};
 static bool g_fgEnabled = false;
+static int g_fgBackend = 0; // 0=FSR, 1=XeSS MFG; applied on next launch
+static int g_xeMfgMultiplier = 3;
+static int g_xeMfgModelRoute = 0; // 0=ported MFG model (2x-6x), 1=native 2x model only
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static OverlayDlssNrConfig g_dlssNr{};
@@ -66,6 +69,10 @@ static void loadCfg() {
   g_frameLimit.fps = frame_limit::clampFps(GetPrivateProfileIntW(L"FrameLimiter", L"fps", 60, ini.c_str()));
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
+  g_fgBackend = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str())), 0, 1);
+  g_xeMfgModelRoute = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"model", 0, ini.c_str())), 0, 1);
+  g_xeMfgMultiplier = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"multiplier", 3, ini.c_str())), 2, 6);
+  if (g_xeMfgModelRoute == 1) g_xeMfgMultiplier = 2;
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
@@ -101,6 +108,10 @@ static void saveCfg() {
   swprintf_s(limitValue, L"%d", g_frameLimit.fps); WritePrivateProfileStringW(L"FrameLimiter", L"fps", limitValue, ini.c_str());
   swprintf_s(limitValue, L"%d", g_frameLimit.method); WritePrivateProfileStringW(L"FrameLimiter", L"method", limitValue, ini.c_str());
   WritePrivateProfileStringW(L"FrameGeneration", L"enabled", g_fgEnabled ? L"1" : L"0", ini.c_str());
+  wchar_t fgValue[16]{};
+  swprintf_s(fgValue, L"%d", g_fgBackend); WritePrivateProfileStringW(L"FrameGeneration", L"backend", fgValue, ini.c_str());
+  swprintf_s(fgValue, L"%d", g_xeMfgMultiplier); WritePrivateProfileStringW(L"FrameGeneration", L"multiplier", fgValue, ini.c_str());
+  swprintf_s(fgValue, L"%d", g_xeMfgModelRoute); WritePrivateProfileStringW(L"FrameGeneration", L"model", fgValue, ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"enabled", g_dlssNr.enabled ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"model", g_dlssNr.newModel ? L"1" : L"0", ini.c_str());
   wchar_t nrValue[32]{};
@@ -187,7 +198,7 @@ static Pending g_pending = Pending::None;
 static bool g_dirtyCfg = false, g_dirtyNr = false;
 // Which sections are open: General 0-2, HUD 3-6, NR 8-11 (Performance starts closed), 12 Composition,
 // 13 its look details, 14 Encoding and exposure, 15 its encoding, 16 its preprocess, 17 Fast mode options.
-static bool g_sec[18] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false};
+static bool g_sec[19] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false, true};
 
 static void generalTab(kit::Panel& p) {
   if (p.section(L"FSR", &g_sec[0])) {
@@ -207,6 +218,36 @@ static void generalTab(kit::Panel& p) {
     if (p.button(L"Choose folder...")) g_pending = Pending::Browse;
     if (p.button(L"Open folder")) g_pending = Pending::OpenFolder;
     p.text(L"The camera button saves the upscaled frame as PNG, without the overlay.");
+  }
+  if (p.section(L"Frame Generation", &g_sec[18])) {
+    static const wchar_t* backends[] = {L"FSR Frame Generation", L"XeSS MFG (AMD)"};
+    g_dirtyCfg |= p.choice(L"Backend", &g_fgBackend, backends, 2,
+      L"Selects the native NRLive frame-generation provider. The choice is applied on the next NRLive launch.");
+    if (g_fgBackend == 1) {
+      static const wchar_t* models[] = {L"Ported MFG model (2x-6x)", L"Native 2x model (2x only)"};
+      int modelRoute = g_xeMfgModelRoute;
+      if (p.choice(L"XeSS model route", &modelRoute, models, 2,
+          L"The native 2x model avoids the AMD MFG model/shader port, but it is restricted to 2x. Applied on restart.")) {
+        g_xeMfgModelRoute = modelRoute;
+        if (g_xeMfgModelRoute == 1) g_xeMfgMultiplier = 2;
+        g_dirtyCfg = true;
+      }
+      if (g_xeMfgModelRoute == 1) {
+        g_xeMfgMultiplier = 2;
+        p.text(L"Native 2x model selected. Output multiplier is fixed at 2x.");
+      } else {
+        static const wchar_t* multipliers[] = {L"2x", L"3x", L"4x", L"5x", L"6x"};
+        int multiplier = std::clamp(g_xeMfgMultiplier - 2, 0, 4);
+        if (p.choice(L"XeSS output multiplier", &multiplier, multipliers, 5,
+            L"Number of output frames per captured frame. The ported MFG model supports 2x through 6x.")) {
+          g_xeMfgMultiplier = multiplier + 2;
+          g_dirtyCfg = true;
+        }
+      }
+      p.text(L"Changing the backend or model route requires restarting NRLive. The FG top-bar switch enables or disables the selected backend.");
+    } else {
+      p.text(L"Select XeSS MFG as the backend to configure its model route and output multiplier.");
+    }
   }
 }
 
@@ -591,21 +632,25 @@ static void runPending(HWND h) {
 }
 
 // One mouse event: the panel's interaction pass, then what it changed.
-static void panelEvent(HWND h) {
+static void panelEvent(HWND h, bool forceRepaint = true) {
   RECT rc{}; GetClientRect(h, &rc);
   g_panel->begin(nullptr, rc, uiScale(), g_in);
   panelUi(*g_panel);
+  const bool hoverChanged = g_panel->takeHoverChanged();
   g_in.pressed = g_in.released = false;
   g_in.wheel = 0;
+  bool settingsChanged = false;
   if (!g_in.down && (g_dirtyCfg || g_dirtyNr)) {
     if (g_dirtyNr && g_nrCfg) g_nrCfg->save();
     if (g_dirtyCfg) saveCfg();
     g_dirtyCfg = g_dirtyNr = false;
     g_saveStatus = L"Saved to scaleconfig.ini";
     if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
+    settingsChanged = true;
   }
   fitSettings();
-  InvalidateRect(h, nullptr, FALSE);
+  if (forceRepaint || hoverChanged || settingsChanged)
+    InvalidateRect(h, nullptr, FALSE);
   if (g_pending != Pending::None) runPending(h);
 }
 
@@ -676,7 +721,7 @@ static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     g_in.mouse = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, h, 0 };
     TrackMouseEvent(&tme);
-    panelEvent(h); return 0;
+    panelEvent(h, g_in.down); return 0;
   }
   case WM_MOUSELEAVE:
     if (!g_in.down) { g_in.mouse = {-1, -1}; InvalidateRect(h, nullptr, FALSE); }
@@ -784,7 +829,8 @@ static bool comboDown(UINT mods, UINT vk) {
 void overlayUpdate(const OverlayFrameStats& st) {
   HudFrame f;
   f.sourceMs = st.sourceMs; f.capture = st.capture; f.output = st.output;
-  f.fsr = st.fsr; f.nr = st.nr; f.nrBuild = st.nrBuild; f.fg = g_fgActive; f.latencyMs = st.latencyMs;
+  f.fsr = st.fsr; f.nr = st.nr; f.nrBuild = st.nrBuild; f.fg = g_fgActive;
+  f.fgMultiplier = std::clamp(st.fgMultiplier, 1u, 6u); f.latencyMs = st.latencyMs;
   f.gpuMotionMs = st.gpuMotionMs; f.gpuNrMs = st.gpuNrMs; f.gpuFsrMs = st.gpuFsrMs; f.gpuTotalMs = st.gpuTotalMs;
   hudPushFrame(f);
 
@@ -846,6 +892,13 @@ void overlaySetDlssNrEnabled(bool enabled) {
   if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
 }
 bool overlayFgEnabled() { return g_fgEnabled; }
+int overlayFgBackend() { return g_fgBackend; }
+void overlaySetFgBackend(int backend) {
+  g_fgBackend = std::clamp(backend, 0, 1);
+  if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
+}
+int overlayXeMfgMultiplier() { return g_xeMfgMultiplier; }
+bool overlayXeMfgNative2xModel() { return g_xeMfgModelRoute == 1; }
 void overlaySetFgEnabled(bool enabled) {
   g_fgEnabled = enabled;
   saveCfg();

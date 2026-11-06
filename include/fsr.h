@@ -58,6 +58,8 @@ public:
                ID3D12Resource* motionVectors,
                Size render, Size display,
                float dt, bool reset, bool enabled);
+  // Serializes proxy-swapchain Present with prepare/callback/context teardown.
+  bool present(Graphics& graphics);
   void shutdown();
   const std::wstring& lastError() const { return m_error; }
   bool ready() const { return m_ctx != nullptr; }

@@ -1,6 +1,7 @@
 #include "fsr.h"
 #include "graphics.h"
 #include <algorithm>
+#include <atomic>
 #include <ffx_api_loader.h>
 #include <cfloat>
 #include <mutex>
@@ -390,7 +391,9 @@ ffxReturnCode_t FsrFrameGeneration::generationCallback(
   auto* self = static_cast<FsrFrameGeneration*>(userCtx);
   if (!self || !params || !g_ffx.Dispatch)
     return FFX_API_RETURN_ERROR_PARAMETER;
-  std::lock_guard<std::mutex> lock(self->m_mutex);
+  // The proxy-swapchain Present is entered through present(), which holds
+  // m_mutex for the whole call. AMD invokes this callback from inside Present;
+  // taking the same non-recursive mutex here would deadlock.
   if (!self->m_ctx)
     return FFX_API_RETURN_ERROR_PARAMETER;
   // A provider can race a failure/toggle with Present. If generation was
@@ -398,9 +401,16 @@ ffxReturnCode_t FsrFrameGeneration::generationCallback(
   if (!self->m_callbackEnabled)
     return FFX_API_RETURN_OK;
   params->reset = params->reset || self->m_pendingReset;
+  static std::atomic<uint64_t> callbackCount{0};
+  const uint64_t sequence = ++callbackCount;
+  if (sequence <= 3 || sequence % 120 == 0)
+    logFfx(L"FG callback dispatch begin; frameId=" + std::to_wstring(params->frameID));
   const ffxReturnCode_t rc = g_ffx.Dispatch(&self->m_ctx, &params->header);
-  if (rc == FFX_API_RETURN_OK)
+  if (rc == FFX_API_RETURN_OK) {
     self->m_pendingReset = false;
+    if (sequence <= 3 || sequence % 120 == 0)
+      logFfx(L"FG callback dispatch OK; frameId=" + std::to_wstring(params->frameID));
+  }
   if (rc != FFX_API_RETURN_OK) {
     self->m_failed = true;
     self->m_callbackEnabled = false;
@@ -480,6 +490,13 @@ bool FsrFrameGeneration::prepare(ID3D12GraphicsCommandList* cmd,
   }
 
   std::lock_guard<std::mutex> lock(m_mutex);
+  static std::atomic<uint64_t> prepareCount{0};
+  const uint64_t prepareSequence = ++prepareCount;
+  const bool logPrepare = prepareSequence <= 3 || prepareSequence % 120 == 0;
+  if (logPrepare)
+    logFfx(L"FG prepare begin; frameId=" + std::to_wstring(m_frameId) +
+           L"; enabled=" + (enabled ? L"1" : L"0") +
+           L"; render=" + std::to_wstring(render.w) + L"x" + std::to_wstring(render.h));
   // Recheck under the same lock used by the Present callback so a late
   // callback failure cannot race with a new frame re-enabling generation.
   if (m_failed) {
@@ -510,6 +527,8 @@ bool FsrFrameGeneration::prepare(ID3D12GraphicsCommandList* cmd,
     return false;
   }
 
+  if (logPrepare)
+    logFfx(L"FG configure OK; frameId=" + std::to_wstring(frameId));
   m_callbackEnabled = false;
   m_pendingReset = enabled && reset;
   if (enabled) {
@@ -545,11 +564,35 @@ bool FsrFrameGeneration::prepare(ID3D12GraphicsCommandList* cmd,
       return false;
     }
     m_callbackEnabled = true;
+    if (logPrepare)
+      logFfx(L"FG PrepareV2 dispatch OK; frameId=" + std::to_wstring(frameId));
+  } else if (logPrepare) {
+    logFfx(L"FG PrepareV2 skipped; frameId=" + std::to_wstring(frameId));
   }
   ++m_frameId;
   m_error = priorFailure ? L"FSR FG disabled after generation callback failure" :
             (enabled ? L"FSR FG prepared for paced Present" : L"FSR FG disabled for this frame");
   return true;
+}
+
+bool FsrFrameGeneration::present(Graphics& graphics)
+{
+  // AMD requires Present to be externally synchronized with PrepareV2 and
+  // context destruction when a frame-generation callback is registered.
+  // The callback executes synchronously from this Present call and therefore
+  // deliberately does not acquire m_mutex a second time.
+  std::lock_guard<std::mutex> lock(m_mutex);
+  static std::atomic<uint64_t> presentCount{0};
+  const uint64_t sequence = ++presentCount;
+  const bool logFrame = sequence <= 3 || sequence % 120 == 0;
+  if (logFrame)
+    logFfx(L"FG proxy Present begin; frameId=" + std::to_wstring(m_frameId) +
+           L"; callbackEnabled=" + (m_callbackEnabled ? L"1" : L"0"));
+  const bool ok = graphics.present();
+  if (logFrame)
+    logFfx(L"FG proxy Present returned; frameId=" + std::to_wstring(m_frameId) +
+           L"; result=" + (ok ? L"OK" : L"FAILED"));
+  return ok;
 }
 
 bool FsrFrameGeneration::failed() const

@@ -336,7 +336,7 @@ HWND resolveFrontWindow()
 std::wstring targetUsage()
 {
     return
-        L"NRLive - capture and upscale a window with FSR 3\n\n"
+        L"NRLive - capture, upscale and generate frames\n\n"
         L"  NRLive.exe                    picker, hidden launcher countdown\n"
         L"  NRLive.exe -pid <id>          capture the window owned by PID\n"
         L"  NRLive.exe -pname <regex>     capture a process whose name matches regex\n"
@@ -348,6 +348,7 @@ std::wstring targetUsage()
         L"  NRLive.exe --mv amdof|fast    select motion-vector implementation (default: fast)\n"
         L"  NRLive.exe --upscaler fsr4|fsr31|none\n"
         L"                                  upscaler after capture and DLSSNR (default: fsr4;\n"
+        L"  NRLive.exe --fg fsr|xemfg       select FSR FG or native XeSS MFG\n"
         L"                                  none stretches the frame to the output)\n"
         L"  NRLive.exe --bindbypass home,insert,end,pageup,pagedown\n"
         L"                                  OptiScaler/ReShade menu keys (not sent to game).\n"
@@ -459,6 +460,18 @@ bool parseTargetArgs(int argc, wchar_t** argv, TargetSpec& spec, std::wstring& e
             const UpscalerInfo* u = findUpscaler(value);
             if (!u) { error = L"invalid upscaler: " + value + L" (valid: " + upscalerIds() + L")"; return false; }
             spec.upscaler = u->kind;
+        } else if (opt == L"--fg" || opt == L"-fg") {
+            if (!need(value)) return false;
+            const std::wstring backend = lower(value);
+            if (backend == L"fsr") {
+                spec.frameGenerationBackend = FrameGenerationBackend::Fsr;
+            } else if (backend == L"xemfg") {
+                spec.frameGenerationBackend = FrameGenerationBackend::XeMfg;
+            } else {
+                error = L"invalid frame generation backend: " + value + L" (valid: fsr, xemfg)";
+                return false;
+            }
+            spec.frameGenerationBackendExplicit = true;
         } else if (opt == L"--trace" || opt == L"-trace") {
             if (!need(value)) return false;
             spec.tracePath = value;

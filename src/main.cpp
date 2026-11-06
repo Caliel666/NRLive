@@ -1,6 +1,7 @@
 #include "graphics.h"
 #include "capture.h"
 #include "fsr.h"
+#include "xess_mfg.h"
 #include "dlssnr.h"
 #include "opennr.h"
 #include "nr_status.h"
@@ -24,6 +25,7 @@
 #include <stdexcept>
 #include <fstream>
 #include <cstring>
+#include <cstdio>
 
 static std::wstring logDirectory()
 {
@@ -39,6 +41,62 @@ static void logMain(const std::wstring& message)
 {
   std::wofstream file(logDirectory() + L"NRLive.log", std::ios::out | std::ios::app);
   if (file) file << message << L"\n";
+}
+
+static LONG WINAPI logUnhandledException(EXCEPTION_POINTERS* info)
+{
+  wchar_t path[MAX_PATH]{};
+  const DWORD count = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  if (count && count < MAX_PATH) {
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (slash) {
+      wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"NRLive-crash.log");
+      HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (file != INVALID_HANDLE_VALUE) {
+        char line[512]{};
+        const DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+        const void* address = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr;
+        char faultModuleUtf8[512]{};
+        if (address) {
+          HMODULE faultModule = nullptr;
+          if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                 reinterpret_cast<LPCWSTR>(const_cast<void*>(address)),
+                                 &faultModule)) {
+            wchar_t modulePath[MAX_PATH]{};
+            if (GetModuleFileNameW(faultModule, modulePath, MAX_PATH))
+              WideCharToMultiByte(CP_UTF8, 0, modulePath, -1, faultModuleUtf8,
+                                  static_cast<int>(sizeof(faultModuleUtf8)), nullptr, nullptr);
+          }
+        }
+        int length = snprintf(line, sizeof(line),
+            "Unhandled native exception: code=0x%08lX address=%p module=%s",
+            static_cast<unsigned long>(code), address,
+            faultModuleUtf8[0] ? faultModuleUtf8 : "(unknown)");
+        if (length > 0 && static_cast<size_t>(length) < sizeof(line) &&
+            info && info->ExceptionRecord &&
+            code == EXCEPTION_ACCESS_VIOLATION &&
+            info->ExceptionRecord->NumberParameters >= 2) {
+          const size_t remaining = sizeof(line) - static_cast<size_t>(length);
+          const int extra = snprintf(line + length, remaining,
+              " operation=%llu target=0x%llX",
+              static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[0]),
+              static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]));
+          if (extra > 0 && static_cast<size_t>(extra) < remaining) length += extra;
+        }
+        if (length > 0 && static_cast<size_t>(length) + 2 < sizeof(line)) {
+          line[length++] = '\r';
+          line[length++] = '\n';
+          DWORD written = 0;
+          WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
+          FlushFileBuffers(file);
+        }
+        CloseHandle(file);
+      }
+    }
+  }
+  return EXCEPTION_EXECUTE_HANDLER;
 }
 
 static bool hasConsole() { return GetConsoleWindow() != nullptr; }
@@ -124,6 +182,7 @@ static bool stopHotkeyDown(UINT modifiers, UINT vk)
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 {
+  SetUnhandledExceptionFilter(logUnhandledException);
   // Windows Graphics Capture uses WinRT activation and frame-pool objects.
   // Initialize the render thread's WinRT apartment before any capture object
   // is created; without this, CreateForWindow can fail with E_INVALIDARG on
@@ -294,54 +353,121 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
     AmdOf amdof;
     FastMv fastmv;
+    logMain(L"Motion pipeline initialization begin: " + spec.motionModeText);
     if (pipelineOk) {
-      amdof.init(gfx.device(), gfx.queue(), render, false); // existing implementation
-      if (spec.motionMode == TargetSpec::MotionMode::Fast)
-        fastmv.init(gfx.device(), render);
+      if (spec.motionMode == TargetSpec::MotionMode::Fast) {
+        logMain(L"FastMV pipeline creation begin");
+        const bool fastReady = fastmv.init(gfx.device(), render);
+        logMain(fastReady ? L"FastMV pipeline ready"
+                          : L"FastMV pipeline FAILED: " + fastmv.lastError());
+        if (!fastReady) {
+          logMain(L"Falling back to AMD optical-flow motion vectors");
+          const bool ofReady = amdof.init(gfx.device(), gfx.queue(), render, false);
+          logMain(ofReady ? L"AMD optical-flow fallback ready"
+                          : L"AMD optical-flow fallback FAILED: " + amdof.lastError());
+          if (ofReady) {
+            spec.motionMode = TargetSpec::MotionMode::AmdOf;
+            spec.motionModeText = L"amdof";
+          }
+        }
+      } else {
+        logMain(L"AMD optical-flow pipeline creation begin");
+        const bool ofReady = amdof.init(gfx.device(), gfx.queue(), render, false);
+        logMain(ofReady ? L"AMD optical-flow pipeline ready"
+                        : L"AMD optical-flow pipeline FAILED: " + amdof.lastError());
+      }
+    } else {
+      logMain(L"Motion pipeline skipped because the upscaler pipeline is unavailable");
     }
 
-    overlayInit(inst, out);
+    logMain(L"Overlay initialization begin");
+    const bool overlayReady = overlayInit(inst, out);
+    logMain(overlayReady ? L"Overlay initialization OK" : L"Overlay initialization FAILED");
     overlaySetNrConfig(&nrConfig, openNrSelected);
     overlaySetAdapter(gfx.device()->GetAdapterLuid());
     GpuTimer gpuTimer;
-    gpuTimer.init(gfx.device(), gfx.queue());
+    logMain(L"GPU timer initialization begin");
+    const bool gpuTimerReady = gpuTimer.init(gfx.device(), gfx.queue());
+    logMain(gpuTimerReady ? L"GPU timer initialization OK" : L"GPU timer unavailable");
     fsr.setSharpening(true, overlaySharpness());
     overlaySetFsrEnabled(fsrEnabled);
     setOverlayHud(nullptr);
     setOverlayOpen(false);
     setStatus(out, label.c_str());
 
-    // Create the actual AMD FSR Frame Generation context. The overlay toggle
-    // remains off unless the provider initializes successfully.
+    // Exactly one provider owns NRLive's output swapchain for this session.
+    // Backend changes are saved by the overlay and applied on the next launch.
+    const bool xeMfgSelected = spec.frameGenerationBackendExplicit
+        ? spec.frameGenerationBackend == FrameGenerationBackend::XeMfg
+        : overlayFgBackend() == 1;
+    if (spec.frameGenerationBackendExplicit)
+      overlaySetFgBackend(xeMfgSelected ? 1 : 0);
     FsrFrameGeneration fg;
-    // Give the wrapper one owned reference, then drop every reference held by
-    // Graphics before AMD destroys/recreates the swapchain. Keeping m_back[] or
-    // m_swap1 alive here makes the SDK's swapchain replacement fail at runtime.
-    IDXGISwapChain4* fgSwapChain = gfx.swapChain();
-    if (fgSwapChain) fgSwapChain->AddRef();
-    gfx.releaseSwapChainForWrap();
-    bool fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
-    logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError() : L"FSR frame generation init FAILED: " + fg.lastError());
-    if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
-      fg.shutdown();
-      fgOk = false;
-      logMain(L"FSR FG wrapped swapchain adoption failed; rebuilding ordinary swapchain");
+    XeMfgFrameGeneration xeMfg;
+    bool fgOk = false;
+    if (xeMfgSelected) {
+      const bool native2xModel = overlayXeMfgNative2xModel();
+      logMain(native2xModel
+          ? L"XeSS MFG selected; native 2x-only model route"
+          : L"XeSS MFG selected; ported MFG model route (2x-6x)");
+      DXGI_SWAP_CHAIN_DESC1 xeMfgSwapChainDesc{};
+      IDXGIFactory2* dxgiFactory = gfx.factory();
+      if (!dxgiFactory || !gfx.swapChainDescription(xeMfgSwapChainDesc))
+        throw std::runtime_error("could not query the DXGI factory or swapchain descriptor for XeSS MFG");
+      logMain(L"XeSS MFG app descriptor captured: " +
+              std::to_wstring(xeMfgSwapChainDesc.BufferCount) + L" backbuffers");
+      // InitFromSwapChainDesc requires no existing swapchain associated with
+      // this HWND. XeSS creates a fresh proxy chain; its internal native chain
+      // receives the scoped 8-buffer MFG queue during initialization.
+      gfx.releaseSwapChainForWrap();
+      logMain(L"XeSS MFG released the original application swapchain");
+      IDXGISwapChain4* wrappedSwapChain = nullptr;
+      logMain(L"XeSS MFG descriptor initialization call begin");
+      fgOk = xeMfg.init(gfx.device(), display, out, dxgiFactory,
+                        xeMfgSwapChainDesc, gfx.queue(), native2xModel, &wrappedSwapChain);
+      logMain(fgOk ? L"XeSS MFG initialization call returned success"
+                   : L"XeSS MFG initialization call returned failure: " + xeMfg.lastError());
+      if (fgOk && !gfx.adoptSwapChain(wrappedSwapChain)) {
+        fgOk = false;
+        gfx.releaseSwapChainForWrap();
+        xeMfg.shutdown();
+        logMain(L"XeSS MFG wrapped swapchain adoption failed");
+      }
+      if (wrappedSwapChain) wrappedSwapChain->Release();
+      logMain(L"XeSS MFG swapchain handoff finished");
+      logMain(fgOk ? L"XeSS MFG init OK: " + xeMfg.lastError()
+                   : L"XeSS MFG init FAILED: " + xeMfg.lastError());
+    } else {
+      IDXGISwapChain4* fgSwapChain = gfx.swapChain();
+      if (fgSwapChain) fgSwapChain->AddRef();
+      gfx.releaseSwapChainForWrap();
+      fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
+      logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError()
+                   : L"FSR frame generation init FAILED: " + fg.lastError());
+      if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
+        fg.shutdown();
+        fgOk = false;
+        logMain(L"FSR FG wrapped swapchain adoption failed");
+      }
     }
     if (!fgOk) {
-      // Failed wrap/context creation may have consumed or invalidated the
-      // original DXGI swapchain pointer. Recreate a clean ordinary swapchain
-      // so capture/upscaling remain usable without frame generation.
+      logMain(L"Frame-generation initialization failed; rebuilding ordinary output swapchain");
       if (!gfx.rebuildSwapChain(display))
-        throw std::runtime_error("could not rebuild DXGI swapchain after FSR FG initialization failed");
-      logMain(L"Ordinary swapchain rebuilt after FSR FG failure");
+        throw std::runtime_error("could not rebuild DXGI swapchain after frame-generation initialization failed");
+      logMain(L"Ordinary swapchain rebuilt after frame-generation initialization failure");
     }
+    // --fg selects only the backend. The persisted overlay setting owns
+    // the enabled/disabled state independently of backend selection.
     bool fgEnabled = fgOk && overlayFgEnabled();
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
-      printCli(fgOk ? fg.lastError() : L"FSR FG unavailable: " + fg.lastError());
+      printCli(fgOk ? (xeMfgSelected ? xeMfg.lastError() : fg.lastError())
+                    : (xeMfgSelected ? L"XeSS MFG unavailable: " + xeMfg.lastError()
+                                     : L"FSR FG unavailable: " + fg.lastError()));
     }
 
+    logMain(L"Startup initialization complete; entering capture/render loop");
     FrameLimiter frameLimiter;
     bool reset = true, running = true;
     bool capturePausedForFocus = false;
@@ -353,6 +479,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     LARGE_INTEGER freq, lastCaptured, now;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&lastCaptured);
+
+    auto qpcDurationMs = [&freq](const LARGE_INTEGER& begin, const LARGE_INTEGER& end) {
+      return (end.QuadPart - begin.QuadPart) * 1000.0 / double(freq.QuadPart);
+    };
+    struct CpuStageMetric {
+      double totalMs = 0.0;
+      double maxMs = 0.0;
+      void add(double value) { totalMs += value; maxMs = std::max(maxMs, value); }
+      double average(uint32_t samples) const { return samples ? totalMs / samples : 0.0; }
+      void clear() { totalMs = 0.0; maxMs = 0.0; }
+    };
+    uint32_t xeCpuProfileSamples = 0;
+    double xeSourceIntervalTotalMs = 0.0;
+    CpuStageMetric xeCaptureWaitCpu, xeBeginCpu, xePrepareCpu, xePresentCpu,
+                   xeAfterPresentCpu, xeFrameCpu;
 
     ShowWindow(out, SW_SHOWNOACTIVATE);
     QueryPerformanceCounter(&lastCaptured); // exclude initialization from the first captured-frame interval
@@ -407,7 +548,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       pollBindBypass(out, spec);
       overlayConsumeFrameLimitToggle();
       const auto limitCfg = overlayFrameLimitConfig();
-      frameLimiter.configure(limitCfg.enabled, limitCfg.fps, limitCfg.method);
+      frameLimiter.configure(!xeMfgSelected && limitCfg.enabled, limitCfg.fps, limitCfg.method);
       if (overlayConsumeFsrToggle() && pipelineOk) {
         fsrEnabled = !fsrEnabled;
         overlaySetFsrEnabled(fsrEnabled);
@@ -506,6 +647,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       Size cs{};
       uint64_t fenceVal = 0;
       LARGE_INTEGER acquireStart{}, acquireEnd{}, renderStart{}, renderEnd{};
+      LARGE_INTEGER queueWaitStart{}, queueWaitEnd{}, stageStart{}, stageEnd{};
+      double xeCaptureWaitMs = 0.0, xeBeginMs = 0.0, xePrepareMs = 0.0;
+      double xePresentMs = 0.0, xeAfterPresentMs = 0.0;
       QueryPerformanceCounter(&acquireStart);
       if (!cap.acquire(color, cs, fenceVal)) {
         // No new capture frame yet — do not re-submit with stale resource states.
@@ -520,12 +664,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       loopMs = (float)((now.QuadPart - lastCaptured.QuadPart) * 1000.0 / double(freq.QuadPart));
       lastCaptured = now;
       if (loopMs > 0.001f) fps = frame_timing::fpsFromFrameDeltaMs(loopMs);
-      if (cap.fence() && fenceVal)
+      if (cap.fence() && fenceVal) {
+        if (xeMfgSelected) QueryPerformanceCounter(&queueWaitStart);
         gfx.queue()->Wait(cap.fence(), fenceVal);
+        if (xeMfgSelected) {
+          QueryPerformanceCounter(&queueWaitEnd);
+          xeCaptureWaitMs = qpcDurationMs(queueWaitStart, queueWaitEnd);
+        }
+      }
       lastCs = cs;
       setScaleSizes(cs, display);
       if (!gfx.ensureAuxTextures(cs)) throw std::runtime_error("auxiliary graphics textures could not be resized");
-      if (fgOk && (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
+      if (!xeMfgSelected && fgOk && (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
         gfx.waitForGpu();
         const bool resizedFg = fg.resize(cs, display);
         fgMaxRender = cs;
@@ -550,7 +700,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       // dt for FSR — use the frame ms from the top-of-loop QPC (stored in fps)
       float dt = frame_timing::clampFrameDeltaMs(fps > 0.001f ? 1000.0f / fps : (1000.0f / 60.0f));
 
+      if (xeMfgSelected && fgOk)
+        xeMfg.markSimulationEndAndRenderSubmitStart();
+      if (xeMfgSelected) QueryPerformanceCounter(&stageStart);
       gfx.begin();
+      if (xeMfgSelected) {
+        QueryPerformanceCounter(&stageEnd);
+        xeBeginMs = qpcDurationMs(stageStart, stageEnd);
+      }
       auto* cmd = gfx.cmd();
       gpuTimer.setEnabled(overlayWantsGpuTimes());
       gpuTimer.mark(cmd, GpuTimer::Begin);
@@ -774,7 +931,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
           }
           cmd->ResourceBarrier(2, toRead);
-          fgPrepared = fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
+          if (xeMfgSelected) {
+            QueryPerformanceCounter(&stageStart);
+            fgPrepared = xeMfg.prepare(cmd, depth, mv, cs, dt, resetThisFrame, true, overlayXeMfgMultiplier());
+            QueryPerformanceCounter(&stageEnd);
+            xePrepareMs = qpcDurationMs(stageStart, stageEnd);
+          } else {
+            fgPrepared = fg.prepare(cmd, depth, mv, cs, display, dt, resetThisFrame, true);
+          }
           D3D12_RESOURCE_BARRIER toWrite[2]{};
           for (int i = 0; i < 2; ++i) {
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -786,18 +950,24 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           }
           cmd->ResourceBarrier(2, toWrite);
         } else {
-          fgPrepared = fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
+          if (xeMfgSelected) {
+            QueryPerformanceCounter(&stageStart);
+            fgPrepared = xeMfg.prepare(cmd, nullptr, nullptr, cs, dt, resetThisFrame, false, overlayXeMfgMultiplier());
+            QueryPerformanceCounter(&stageEnd);
+            xePrepareMs = qpcDurationMs(stageStart, stageEnd);
+          } else {
+            fgPrepared = fg.prepare(cmd, nullptr, nullptr, cs, display, dt, resetThisFrame, false);
+          }
         }
         if (!fgPrepared && runFgThisFrame) {
           fgEnabled = false;
           overlaySetFgEnabled(false);
           if (cliMode && hasConsole())
-            printCli(L"FSR FG disabled after prepare failure: " + fg.lastError());
-          setStatus(out, fg.lastError().c_str());
+            printCli((xeMfgSelected ? L"XeSS MFG" : L"FSR FG") + std::wstring(L" disabled after prepare failure: ") + (xeMfgSelected ? xeMfg.lastError() : fg.lastError()));
+          const std::wstring& fgError = xeMfgSelected ? xeMfg.lastError() : fg.lastError();
+          setStatus(out, fgError.c_str());
         }
       }
-
-      overlaySetFgActive(runFgThisFrame && fgPrepared && !fg.failed());
 
       const float clear[4] = { 0, 0, 0, 1 };
       cmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
@@ -839,19 +1009,100 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
-      gfx.present();
+      if (xeMfgSelected && fgOk) {
+        QueryPerformanceCounter(&stageStart);
+        gfx.present([](void* context) {
+          static_cast<XeMfgFrameGeneration*>(context)->markSubmittedAndPresentStart();
+        }, &xeMfg);
+        QueryPerformanceCounter(&stageEnd);
+        xePresentMs = qpcDurationMs(stageStart, stageEnd);
+      } else if (xeMfgSelected) {
+        // A failed or unavailable XeMFG context must not keep routing frames
+        // through its proxy swapchain.
+        gfx.present();
+      } else {
+        fg.present(gfx); // lock spans proxy Present and its synchronous FG callback
+      }
+      bool xeMfgGenerated = false;
+      if (xeMfgSelected && fgOk) {
+        QueryPerformanceCounter(&stageStart);
+        xeMfgGenerated = xeMfg.afterPresent();
+        QueryPerformanceCounter(&stageEnd);
+        xeAfterPresentMs = qpcDurationMs(stageStart, stageEnd);
+      }
+      overlaySetFgActive(runFgThisFrame && fgPrepared &&
+                         (xeMfgSelected ? xeMfgGenerated : !fg.failed()));
       openNr.retire(); // its consumer list went with Present
-      if (fgOk && fg.failed()) {
+      const bool fgFailed = fgOk && (xeMfgSelected ? xeMfg.failed() : fg.failed());
+      if (fgFailed) {
         fgEnabled = false;
         overlaySetFgEnabled(false);
+        const std::wstring& fgError = xeMfgSelected ? xeMfg.lastError() : fg.lastError();
         if (cliMode && hasConsole())
-          printCli(L"FSR FG disabled after generation failure: " + fg.lastError());
-        setStatus(out, fg.lastError().c_str());
+          printCli((xeMfgSelected ? L"XeSS MFG" : L"FSR FG") + std::wstring(L" disabled after generation failure: ") + fgError);
+        setStatus(out, fgError.c_str());
+
+        // XeFG failure leaves the proxy swapchain alive even after generation
+        // is disabled. Drain it, destroy XeFG/XeLL in order, and restore a
+        // normal DXGI swapchain so a failed FG attempt cannot keep the slower
+        // proxy Present path in the render loop.
+        if (xeMfgSelected) {
+          logMain(L"XeSS MFG runtime failed; restoring ordinary DXGI output");
+          gfx.waitForGpu();
+          gfx.releaseSwapChainForWrap();
+          xeMfg.shutdown();
+          if (!gfx.rebuildSwapChain(display))
+            throw std::runtime_error("could not restore ordinary DXGI swapchain after XeSS MFG failure");
+          fgOk = false;
+          logMain(L"Ordinary DXGI output restored after XeSS MFG failure");
+        }
       }
       QueryPerformanceCounter(&renderEnd);
       const double acquireMs = (acquireEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       const double renderCpuMs = (renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / double(freq.QuadPart);
       trace.record(cap.totalFrames(), loopMs, acquireMs, renderCpuMs, cs, display, spec.motionModeText, usedFsr);
+
+      if (xeMfgSelected) {
+        ++xeCpuProfileSamples;
+        xeSourceIntervalTotalMs += loopMs;
+        xeCaptureWaitCpu.add(xeCaptureWaitMs);
+        xeBeginCpu.add(xeBeginMs);
+        xePrepareCpu.add(xePrepareMs);
+        xePresentCpu.add(xePresentMs);
+        xeAfterPresentCpu.add(xeAfterPresentMs);
+        xeFrameCpu.add(renderCpuMs);
+        if (xeCpuProfileSamples >= 120) {
+          const double samples = static_cast<double>(xeCpuProfileSamples);
+          const double sourceFps = xeSourceIntervalTotalMs > 0.001
+              ? samples * 1000.0 / xeSourceIntervalTotalMs : 0.0;
+          const uint32_t outputFramesPerSource = xeMfg.framesPresented();
+          const double queuedOutputFps = sourceFps * outputFramesPerSource;
+          logMain(L"XeMFG CPU profile samples=" + std::to_wstring(xeCpuProfileSamples) +
+              L" source_fps=" + std::to_wstring(sourceFps) +
+              L" queued_frames_per_source=" + std::to_wstring(outputFramesPerSource) +
+              L" queued_output_fps_estimate=" + std::to_wstring(queuedOutputFps) +
+              L" capture_queue_wait_avg/max_ms=" + std::to_wstring(xeCaptureWaitCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeCaptureWaitCpu.maxMs) +
+              L" gfx_begin_avg/max_ms=" + std::to_wstring(xeBeginCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeBeginCpu.maxMs) +
+              L" prepare_avg/max_ms=" + std::to_wstring(xePrepareCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xePrepareCpu.maxMs) +
+              L" proxy_present_avg/max_ms=" + std::to_wstring(xePresentCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xePresentCpu.maxMs) +
+              L" after_present_avg/max_ms=" + std::to_wstring(xeAfterPresentCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeAfterPresentCpu.maxMs) +
+              L" full_frame_cpu_avg/max_ms=" + std::to_wstring(xeFrameCpu.average(xeCpuProfileSamples)) +
+              L"/" + std::to_wstring(xeFrameCpu.maxMs));
+          xeCpuProfileSamples = 0;
+          xeSourceIntervalTotalMs = 0.0;
+          xeCaptureWaitCpu.clear();
+          xeBeginCpu.clear();
+          xePrepareCpu.clear();
+          xePresentCpu.clear();
+          xeAfterPresentCpu.clear();
+          xeFrameCpu.clear();
+        }
+      }
 
       gpuTimer.frameDone();
       {
@@ -861,6 +1112,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         hs.output = display;
         hs.fsr = usedFsr;
         hs.nr = nrOutputForFrame != nullptr;
+        hs.fgMultiplier = xeMfgSelected ? xeMfg.framesPresented() : 2u;
         // NRLive's own share of the latency: frame acquired -> handed to present.
         hs.latencyMs = (float)((renderEnd.QuadPart - acquireStart.QuadPart) * 1000.0 / double(freq.QuadPart));
         const auto& gt = gpuTimer.latest();
@@ -915,7 +1167,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     openNr.shutdown();
     fastmv.shutdown();
     amdof.shutdown();
-    fg.shutdown();
+    if (xeMfgSelected && fgOk) {
+      // XeSS owns the wrapped DXGI chain; release NRLive's backbuffer references
+      // before destroying its swapchain context (otherwise it reports pointer-in-use).
+      gfx.releaseSwapChainForWrap();
+      xeMfg.shutdown();
+    } else {
+      fg.shutdown();
+    }
     fsr.shutdown();
     overlayShutdown();
     cap.stop();

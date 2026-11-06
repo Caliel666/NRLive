@@ -46,6 +46,7 @@ struct OverlayFrameStats {
   float sourceMs = 0;          // interval between captured frames
   Size capture{}, output{};
   bool fsr = false, nr = false;
+  uint32_t fgMultiplier = 2; // presented output frames per captured source frame
   NrBuild nrBuild;             // OpenNR's network build
   float latencyMs = -1;        // frame acquired -> present call, <0 unknown
   float gpuMotionMs = -1, gpuNrMs = -1, gpuFsrMs = -1, gpuTotalMs = -1;
@@ -64,6 +65,10 @@ bool overlayConsumeDlssNrToggle();            // returns true once when the NR b
 const OverlayDlssNrConfig& overlayDlssNrConfig();
 void overlaySetDlssNrEnabled(bool enabled);
 bool overlayFgEnabled();
+int overlayFgBackend();             // 0=FSR, 1=XeSS MFG; selected at startup
+void overlaySetFgBackend(int backend); // non-persisting command-line override
+int overlayXeMfgMultiplier();       // 2x..6x output multiplier
+bool overlayXeMfgNative2xModel(); // true selects native 2x-only model; applied on next launch
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);

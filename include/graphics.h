@@ -28,6 +28,10 @@ public:
   void end();
   ID3D12Device* device() const { return m_dev.Get(); }
   IDXGISwapChain4* swapChain() const { return m_swap.Get(); }
+  IDXGIFactory2* factory() const { return m_factory.Get(); }
+  bool swapChainDescription(DXGI_SWAP_CHAIN_DESC1& desc) const {
+    return m_swap1 && SUCCEEDED(m_swap1->GetDesc1(&desc));
+  }
   ID3D12CommandQueue* queue() const { return m_queue.Get(); }
   ID3D12GraphicsCommandList* cmd() const { return (m_interopContinuation ? m_cmdContinuation : m_cmd).Get(); }
   ID3D12Resource* backbuffer() const { return m_back[m_index].Get(); }
@@ -43,7 +47,7 @@ public:
   uint32_t index() const { return m_index; }
   Size display() const { return m_display; }
   Size renderSize() const { return m_render; }
-  bool present();
+  bool present(void (*afterSubmitBeforePresent)(void*) = nullptr, void* callbackContext = nullptr);
 
   // Drain the GPU: signal the frame fence and CPU-wait until the GPU has
   // finished everything queued up to this point.  Call this BEFORE tearing
