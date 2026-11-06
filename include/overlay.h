@@ -68,6 +68,7 @@ bool overlayFgEnabled();
 int overlayFgBackend();             // 0=FSR, 1=XeSS MFG; selected at startup
 void overlaySetFgBackend(int backend); // non-persisting command-line override
 int overlayXeMfgMultiplier();       // 2x..6x output multiplier
+bool overlayXeMfgNative2xModel(); // true selects native 2x-only model; applied on next launch
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);
