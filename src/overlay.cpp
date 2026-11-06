@@ -42,6 +42,7 @@ static OverlayFrameLimitConfig g_frameLimit{};
 static bool g_fgEnabled = false;
 static int g_fgBackend = 0; // 0=FSR, 1=XeSS MFG; applied on next launch
 static int g_xeMfgMultiplier = 3;
+static int g_xeMfgModelRoute = 0; // 0=ported MFG model (2x-6x), 1=native 2x model only
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static OverlayDlssNrConfig g_dlssNr{};
@@ -69,7 +70,9 @@ static void loadCfg() {
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
   g_fgBackend = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str())), 0, 1);
+  g_xeMfgModelRoute = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"model", 0, ini.c_str())), 0, 1);
   g_xeMfgMultiplier = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"multiplier", 3, ini.c_str())), 2, 6);
+  if (g_xeMfgModelRoute == 1) g_xeMfgMultiplier = 2;
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
@@ -108,6 +111,7 @@ static void saveCfg() {
   wchar_t fgValue[16]{};
   swprintf_s(fgValue, L"%d", g_fgBackend); WritePrivateProfileStringW(L"FrameGeneration", L"backend", fgValue, ini.c_str());
   swprintf_s(fgValue, L"%d", g_xeMfgMultiplier); WritePrivateProfileStringW(L"FrameGeneration", L"multiplier", fgValue, ini.c_str());
+  swprintf_s(fgValue, L"%d", g_xeMfgModelRoute); WritePrivateProfileStringW(L"FrameGeneration", L"model", fgValue, ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"enabled", g_dlssNr.enabled ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"model", g_dlssNr.newModel ? L"1" : L"0", ini.c_str());
   wchar_t nrValue[32]{};
@@ -219,14 +223,31 @@ static void generalTab(kit::Panel& p) {
     static const wchar_t* backends[] = {L"FSR Frame Generation", L"XeSS MFG (AMD)"};
     g_dirtyCfg |= p.choice(L"Backend", &g_fgBackend, backends, 2,
       L"Selects the native NRLive frame-generation provider. The choice is applied on the next NRLive launch.");
-    static const wchar_t* multipliers[] = {L"2x", L"3x", L"4x", L"5x", L"6x"};
-    int multiplier = std::clamp(g_xeMfgMultiplier - 2, 0, 4);
-    if (p.choice(L"XeSS output multiplier", &multiplier, multipliers, 5,
-        L"Number of output frames per captured frame. XeSS MFG requires the AMD runtime setup beside NRLive.")) {
-      g_xeMfgMultiplier = multiplier + 2;
-      g_dirtyCfg = true;
+    if (g_fgBackend == 1) {
+      static const wchar_t* models[] = {L"Ported MFG model (2x-6x)", L"Native 2x model (2x only)"};
+      int modelRoute = g_xeMfgModelRoute;
+      if (p.choice(L"XeSS model route", &modelRoute, models, 2,
+          L"The native 2x model avoids the AMD MFG model/shader port, but it is restricted to 2x. Applied on restart.")) {
+        g_xeMfgModelRoute = modelRoute;
+        if (g_xeMfgModelRoute == 1) g_xeMfgMultiplier = 2;
+        g_dirtyCfg = true;
+      }
+      if (g_xeMfgModelRoute == 1) {
+        g_xeMfgMultiplier = 2;
+        p.text(L"Native 2x model selected. Output multiplier is fixed at 2x.");
+      } else {
+        static const wchar_t* multipliers[] = {L"2x", L"3x", L"4x", L"5x", L"6x"};
+        int multiplier = std::clamp(g_xeMfgMultiplier - 2, 0, 4);
+        if (p.choice(L"XeSS output multiplier", &multiplier, multipliers, 5,
+            L"Number of output frames per captured frame. The ported MFG model supports 2x through 6x.")) {
+          g_xeMfgMultiplier = multiplier + 2;
+          g_dirtyCfg = true;
+        }
+      }
+      p.text(L"Changing the backend or model route requires restarting NRLive. The FG top-bar switch enables or disables the selected backend.");
+    } else {
+      p.text(L"Select XeSS MFG as the backend to configure its model route and output multiplier.");
     }
-    p.text(L"Changing the backend requires restarting NRLive. The FG top-bar switch enables or disables the selected backend.");
   }
 }
 
@@ -877,6 +898,7 @@ void overlaySetFgBackend(int backend) {
   if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
 }
 int overlayXeMfgMultiplier() { return g_xeMfgMultiplier; }
+bool overlayXeMfgNative2xModel() { return g_xeMfgModelRoute == 1; }
 void overlaySetFgEnabled(bool enabled) {
   g_fgEnabled = enabled;
   saveCfg();
