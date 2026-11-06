@@ -31,6 +31,7 @@ static void logEvent(const char* stage, const std::string& fields = {});
 #include "host_unlock.h"
 #include "model_port.h"
 #include "shader_port.h"
+#include "xess_mfg_policy.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -385,18 +386,33 @@ public:
     std::unique_ptr<xess_host_unlock::Unlock> unlock;
     std::unique_ptr<xess_host_unlock::OutputRing> outputRing;
 
-    void apply(HMODULE fg, HMODULE ll, HMODULE payload, UINT vendor)
+    void apply(HMODULE fg, HMODULE ll, HMODULE payload, UINT vendor, bool native2xModel)
     {
-        logEvent("model_port_begin");
-        model = std::make_unique<ModelPort>(fg, true, true);
-        logEvent("model_port_ready");
-        logEvent("shader_port_begin");
-        shader = std::make_unique<ShaderPort>(fg, payload, std::filesystem::path{}, vendor);
-        logEvent("shader_port_ready");
-        // The AMD port uses the MFG model for every multiplier, including 2x.
-        // Five interpolated frames unlock the API limit to 6x output.
+        const auto route = xess_mfg_policy::normalizeModelRoute(
+            native2xModel ? static_cast<uint32_t>(xess_mfg_policy::ModelRoute::Native2x)
+                          : static_cast<uint32_t>(xess_mfg_policy::ModelRoute::PortedMfg));
+        if (xess_mfg_policy::usesCompatibilityPort(route)) {
+            logEvent("model_port_begin");
+            model = std::make_unique<ModelPort>(fg, true, true);
+            logEvent("model_port_ready");
+            logEvent("shader_port_begin");
+            shader = std::make_unique<ShaderPort>(fg, payload, std::filesystem::path{}, vendor);
+            logEvent("shader_port_ready");
+        } else {
+            // Upstream's native 2x route intentionally keeps the provider's
+            // own 2x model and skips both the MFG model and shader ports.
+            // It is not valid for 3x-6x temporal placement.
+            logEvent("native_2x_model_selected");
+        }
+        logEvent("model_route",
+            std::string("\"route\":\"") +
+            (route == xess_mfg_policy::ModelRoute::Native2x ? "native_2x_only" : "ported_mfg_2x_to_6x") +
+            "\",\"max_multiplier\":" + std::to_string(xess_mfg_policy::maxMultiplier(route)));
+        // The compatibility path uses the MFG model for 2x-6x. Native2x
+        // keeps XeFG's separate 2x model and is restricted to that multiplier.
         logEvent("host_unlock_begin");
-        unlock = std::make_unique<xess_host_unlock::Unlock>(fg, ll, uint8_t(5), false);
+        unlock = std::make_unique<xess_host_unlock::Unlock>(
+            fg, ll, uint8_t(5), route == xess_mfg_policy::ModelRoute::Native2x);
         logEvent("host_unlock_ready");
 
         // The stock output ring has one slot. That makes the next MFG batch
@@ -439,10 +455,12 @@ XeMfgFrameGeneration::~XeMfgFrameGeneration()
 
 bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display, HWND output,
                                 IDXGIFactory2* factory, const DXGI_SWAP_CHAIN_DESC1& swapChainDesc,
-                                ID3D12CommandQueue* queue, IDXGISwapChain4** wrappedSwapChain)
+                                ID3D12CommandQueue* queue, bool native2xModel,
+                                IDXGISwapChain4** wrappedSwapChain)
 {
     logEvent("init_begin");
     shutdown();
+    m_native2xModel = native2xModel;
     if (!device || !output || !factory || !queue || !wrappedSwapChain ||
         !swapChainDesc.Width || !swapChainDesc.Height || !swapChainDesc.BufferCount) {
         m_error = L"XeSS MFG: invalid D3D12 initialization arguments";
@@ -487,7 +505,7 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display, HWND output,
         if (vendor != 0x1002) throw std::runtime_error("XeMFG_AMD_route_requires_vendor_1002");
         logEvent("compatibility_patches_begin", "\"vendor_id\":" + std::to_string(vendor));
         auto patches = std::make_unique<XeMfgPatches>();
-        patches->apply(m_api->fgModule, m_api->llModule, m_api->payloadModule, vendor);
+        patches->apply(m_api->fgModule, m_api->llModule, m_api->payloadModule, vendor, m_native2xModel);
         m_patches = std::move(patches);
         logEvent("compatibility_patches_ready");
 
@@ -563,7 +581,9 @@ bool XeMfgFrameGeneration::init(ID3D12Device* device, Size display, HWND output,
         m_failed = false;
         m_xellFailed = false;
         m_active = false;
-        m_error = L"XeSS MFG ready (AMD 2x-6x)";
+        m_error = m_native2xModel
+            ? L"XeSS native 2x model ready (AMD; 2x only)"
+            : L"XeSS MFG ready (AMD 2x-6x)";
         fgResult = m_api->setFrameCount(fgContext, 1);
         if (fgResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             throw std::runtime_error("xefg_set_initial_frame_count_" + std::to_string(static_cast<int>(fgResult)));
@@ -607,7 +627,17 @@ bool XeMfgFrameGeneration::prepare(ID3D12GraphicsCommandList* commandList,
     const uint32_t id = m_frameId;
     auto fg = static_cast<xefg_swapchain_handle_t>(m_context);
     auto xell = static_cast<xell_context_handle_t>(m_xell);
-    multiplier = std::clamp(multiplier, 2u, 6u);
+    const auto modelRoute = m_native2xModel
+        ? xess_mfg_policy::ModelRoute::Native2x
+        : xess_mfg_policy::ModelRoute::PortedMfg;
+    const uint32_t requestedMultiplier = multiplier;
+    multiplier = xess_mfg_policy::clampMultiplier(multiplier, modelRoute);
+    if (requestedMultiplier != multiplier) {
+        logEvent("multiplier_clamped",
+            "\"requested\":" + std::to_string(requestedMultiplier) +
+            ",\"applied\":" + std::to_string(multiplier) +
+            ",\"model_route\":\"native_2x_only\"");
+    }
 
     bool frameInputsValid = true;
     if (!render.w || !render.h)
@@ -907,4 +937,5 @@ void XeMfgFrameGeneration::shutdown() noexcept
     m_xellFailed = false;
     m_frameId = 0;
     m_framesPresented = 1;
+    m_native2xModel = false;
 }
