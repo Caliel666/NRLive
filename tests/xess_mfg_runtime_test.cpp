@@ -1,6 +1,8 @@
 #include "runtime_layout.h"
 #include "runtime_payload.h"
+#include "host_unlock.h"
 
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <iterator>
@@ -99,12 +101,52 @@ int wmain(int argc, wchar_t** argv)
             return 7;
         }
 
+        // Execute the same checked in-memory patch transactions NRLive uses.
+        // Both routes must be safely applicable and fully restorable on the
+        // exact staged provider pair before this runtime is accepted.
+        {
+            xess_host_unlock::Unlock native2x(fg, ll, 5, true);
+            const auto& sites = native2x.Applied();
+            const auto keep2x = std::find_if(sites.begin(), sites.end(),
+                [](const auto& site) { return std::string(site.name) == "fg_keep_2x_model"; });
+            if (!native2x.Keeps2xModel() || keep2x == sites.end())
+            {
+                std::cerr << "Native 2x route did not retain XeFG's native 2x model site.\n";
+                return 9;
+            }
+            native2x.Restore();
+        }
+        {
+            xess_host_unlock::Unlock portedMfg(fg, ll, 5, false);
+            const auto& sites = portedMfg.Applied();
+            const auto keep2x = std::find_if(sites.begin(), sites.end(),
+                [](const auto& site) { return std::string(site.name) == "fg_keep_2x_model"; });
+            if (portedMfg.Keeps2xModel() || keep2x != sites.end())
+            {
+                std::cerr << "Ported MFG route unexpectedly retained the native 2x model site.\n";
+                return 10;
+            }
+            portedMfg.Restore();
+        }
+        {
+            xess_host_unlock::OutputRing ring(fg, 2);
+            if (!ring.Applied() || ring.Depth() != 2)
+            {
+                std::cerr << "XeFG two-slot output ring did not apply.\n";
+                return 11;
+            }
+            ring.Restore();
+        }
+
         std::cout << "XeSS MFG runtime validation: PASS\n"
                   << "  XeFG layout: " << fgLayout.family << "\n"
                   << "  XeLL layout: " << llLayout.family << "\n"
                   << "  required exports: " << std::size(fgExports) + std::size(llExports) << "\n"
                   << "  model programs: " << programs.size() << "\n"
-                  << "  replacement shaders: " << replacements.size() << "\n";
+                  << "  replacement shaders: " << replacements.size() << "\n"
+                  << "  native 2x patch transaction: PASS\n"
+                  << "  ported MFG patch transaction: PASS\n"
+                  << "  output ring patch transaction: PASS\n";
         return 0;
     }
     catch (const std::exception& e)
