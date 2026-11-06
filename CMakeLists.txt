@@ -174,4 +174,27 @@ if(BUILD_TESTING)
   )
   add_test(NAME fastmv_shader_and_motion_invariants
            COMMAND fastmv_shader_test)
+
+  # Exercise the exact XeSS runtime and AMD payload staged by the Windows CI
+  # workflow. This is a runtime/ABI/layout/payload integration test; actual
+  # frame generation still requires a compatible AMD GPU and driver.
+  add_executable(xess_mfg_runtime_test
+    tests/xess_mfg_runtime_test.cpp
+    third_party/xess_mfg/runtime_payload.cpp
+  )
+  target_include_directories(xess_mfg_runtime_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/third_party/xess_mfg"
+    "${XESS_INCLUDE_FG}"
+    "${XESS_INCLUDE_LL}"
+  )
+  target_compile_definitions(xess_mfg_runtime_test PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+  )
+  target_link_libraries(xess_mfg_runtime_test PRIVATE bcrypt)
+  add_test(NAME xess_mfg_runtime_exports_layout_and_payload
+    COMMAND xess_mfg_runtime_test
+      "$<TARGET_FILE_DIR:NRLive>/xess/libxess_fg.dll"
+      "$<TARGET_FILE_DIR:NRLive>/xess/libxell.dll"
+      "$<TARGET_FILE_DIR:NRLive>/xess/MFGUnlocker.dll"
+  )
 endif()
