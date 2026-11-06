@@ -181,6 +181,7 @@ if(BUILD_TESTING)
   add_executable(xess_mfg_runtime_test
     tests/xess_mfg_runtime_test.cpp
     third_party/xess_mfg/runtime_payload.cpp
+    third_party/xess_mfg/host_unlock.cpp
   )
   target_include_directories(xess_mfg_runtime_test PRIVATE
     "${CMAKE_SOURCE_DIR}/third_party/xess_mfg"
