@@ -301,6 +301,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     }
 
     overlayInit(inst, out);
+    overlaySetReservedHotkeys(spec.stopHotkeyModifiers, spec.stopHotkeyVk,
+                              spec.overlayHotkeyModifiers, spec.overlayHotkeyVk);
     overlaySetNrConfig(&nrConfig, openNrSelected);
     overlaySetAdapter(gfx.device()->GetAdapterLuid());
     GpuTimer gpuTimer;
@@ -362,13 +364,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       MSG msg{};
       while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) running = false;
-        if (msg.message == WM_HOTKEY && (int)msg.wParam == kStopId) running = false;
+        // A key being captured is input, not a command to stop NRLive. The
+        // reserved Force Stop chord is rejected by the capture hook itself.
+        if (msg.message == WM_HOTKEY && (int)msg.wParam == kStopId &&
+            !overlayIsCapturingKeybind()) running = false;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }
       if (!running) break;
 
-      pollOverlayToggle(spec);
+      if (!overlayIsCapturingKeybind()) pollOverlayToggle(spec);
       pollOverlayFocus();
       if (overlayConsumeDlssNrToggle()) {
         reset = true;
@@ -438,7 +443,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         break;
       }
 
-      if (stopHotkeyDown(spec.stopHotkeyModifiers, spec.stopHotkeyVk)) {
+      if (overlayIsCapturingKeybind()) {
+        // Don't let the fallback Force Stop poll end the process while the
+        // keyboard listener is explicitly capturing a shortcut.
+        stopLatched = false;
+      } else if (stopHotkeyDown(spec.stopHotkeyModifiers, spec.stopHotkeyVk)) {
         if (!stopLatched) { running = false; break; }
         stopLatched = true;
       } else stopLatched = false;
