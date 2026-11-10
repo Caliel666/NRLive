@@ -57,6 +57,8 @@ static bool g_keybindPrev[4]{};
 static int g_captureKeybind = -1;
 static HHOOK g_keyCaptureHook = nullptr;
 static bool g_keyboardState[256]{};
+static UINT g_reservedStopVk = 0, g_reservedStopMods = 0;
+static UINT g_reservedOverlayVk = 0, g_reservedOverlayMods = 0;
 static constexpr UINT kKeybindCaptureMessage = WM_APP + 0x3A;
 static const wchar_t* kKeybindNames[] = {L"Screenshot", L"FSR", L"Frame Generation", L"Neural Rendering"};
 static ULONGLONG g_iniCheckAt = 0;
@@ -252,16 +254,14 @@ static bool isModifierKey(UINT vk) {
 }
 
 static UINT currentCaptureModifiers() {
-  const auto pressed = [](UINT generic, UINT left, UINT right) {
-    return g_keyboardState[generic] || g_keyboardState[left] || g_keyboardState[right] ||
-           (GetAsyncKeyState((int)generic) & 0x8000) != 0;
-  };
   UINT modifiers = 0;
-  if (pressed(VK_CONTROL, VK_LCONTROL, VK_RCONTROL)) modifiers |= MOD_CONTROL;
-  if (pressed(VK_SHIFT, VK_LSHIFT, VK_RSHIFT)) modifiers |= MOD_SHIFT;
-  if (pressed(VK_MENU, VK_LMENU, VK_RMENU)) modifiers |= MOD_ALT;
-  if (g_keyboardState[VK_LWIN] || g_keyboardState[VK_RWIN] ||
-      (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
+  if (g_keyboardState[VK_CONTROL] || g_keyboardState[VK_LCONTROL] || g_keyboardState[VK_RCONTROL])
+    modifiers |= MOD_CONTROL;
+  if (g_keyboardState[VK_SHIFT] || g_keyboardState[VK_LSHIFT] || g_keyboardState[VK_RSHIFT])
+    modifiers |= MOD_SHIFT;
+  if (g_keyboardState[VK_MENU] || g_keyboardState[VK_LMENU] || g_keyboardState[VK_RMENU])
+    modifiers |= MOD_ALT;
+  if (g_keyboardState[VK_LWIN] || g_keyboardState[VK_RWIN])
     modifiers |= MOD_WIN;
   return modifiers;
 }
@@ -287,28 +287,40 @@ static LRESULT CALLBACK keybindKeyboardProc(int code, WPARAM message, LPARAM dat
           if (g_settings) PostMessageW(g_settings, kKeybindCaptureMessage, 0, 0);
         } else if (!isModifierKey(vk)) {
           const UINT modifiers = currentCaptureModifiers();
-          bool duplicate = false;
-          for (int i = 0; i < 4; ++i) {
-            if (i != g_captureKeybind && g_keybindVk[i] == vk &&
-                g_keybindMods[i] == modifiers) {
-              duplicate = true;
-              break;
-            }
-          }
-
-          if (duplicate) {
-            g_saveStatus = L"That key combination is already assigned";
+          const bool reservedStop = vk == g_reservedStopVk && modifiers == g_reservedStopMods;
+          const bool reservedOverlay = vk == g_reservedOverlayVk && modifiers == g_reservedOverlayMods;
+          if (reservedStop || reservedOverlay) {
+            g_saveStatus = reservedStop
+                ? L"This is the Force Stop shortcut; choose another combination"
+                : L"This is the Overlay shortcut; choose another combination";
+            // Keep listening. The main loop also suppresses these reserved
+            // actions for as long as capture remains active.
+            if (g_settings)
+              PostMessageW(g_settings, kKeybindCaptureMessage, 0, 0);
           } else {
-            g_keybindVk[g_captureKeybind] = vk;
-            g_keybindMods[g_captureKeybind] = modifiers;
-            // Avoid firing the freshly captured key-down, but don't leave a
-            // stale edge armed if the key is released before the next frame.
-            g_keybindPrev[g_captureKeybind] = keybindDown(modifiers, vk);
-            g_saveStatus = L"Keybind saved to scaleconfig.ini";
+            bool duplicate = false;
+            for (int i = 0; i < 4; ++i) {
+              if (i != g_captureKeybind && g_keybindVk[i] == vk &&
+                  g_keybindMods[i] == modifiers) {
+                duplicate = true;
+                break;
+              }
+            }
+
+            if (duplicate) {
+              g_saveStatus = L"That key combination is already assigned";
+            } else {
+              g_keybindVk[g_captureKeybind] = vk;
+              g_keybindMods[g_captureKeybind] = modifiers;
+              // The captured key is still down; the per-frame edge detector
+              // will observe the release before it can trigger this binding.
+              g_keybindPrev[g_captureKeybind] = true;
+              g_saveStatus = L"Keybind saved to scaleconfig.ini";
+            }
+            g_captureKeybind = -1;
+            if (g_settings)
+              PostMessageW(g_settings, kKeybindCaptureMessage, duplicate ? 0 : 1, 0);
           }
-          g_captureKeybind = -1;
-          if (g_settings)
-            PostMessageW(g_settings, kKeybindCaptureMessage, duplicate ? 0 : 1, 0);
         }
       }
     }
@@ -807,7 +819,7 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
   case kKeybindCaptureMessage:
-    if (w) saveCfg();
+    if (w == 1) saveCfg();
     InvalidateRect(h, nullptr, FALSE);
     return 0;
   case WM_PAINT: {
@@ -1008,6 +1020,15 @@ void overlayUpdate(const OverlayFrameStats& st) {
 void overlaySetAdapter(LUID luid) { hudSetAdapter(luid); }
 void overlaySetCaptureExcluded(bool exclude) { hudSetCaptureExcluded(exclude); }
 bool overlayWantsGpuTimes() { return g_fpsVisible && g_cfg.gpu_times; }
+
+void overlaySetReservedHotkeys(UINT stopModifiers, UINT stopVk, UINT overlayModifiers, UINT overlayVk) {
+  g_reservedStopMods = stopModifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+  g_reservedStopVk = stopVk;
+  g_reservedOverlayMods = overlayModifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+  g_reservedOverlayVk = overlayVk;
+}
+
+bool overlayIsCapturingKeybind() { return g_captureKeybind >= 0 && g_captureKeybind < 4; }
 
 void overlaySetFsrEnabled(bool e) { g_fsr = e; if (g_ui) InvalidateRect(g_ui, nullptr, FALSE); }
 bool overlayConsumeFsrToggle() { bool v = g_toggleFsr; g_toggleFsr = false; return v; }
