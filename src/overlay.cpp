@@ -265,6 +265,7 @@ static void pollKeybindCapture() {
     if (!duplicate) {
       g_keybindVk[g_captureKeybind] = vk;
       g_keybindMods[g_captureKeybind] = modifiers;
+      g_keybindPrev[g_captureKeybind] = true; // do not fire the newly assigned bind on the capture key-down
       saveCfg();
       g_saveStatus = L"Keybind saved to scaleconfig.ini";
     } else {
