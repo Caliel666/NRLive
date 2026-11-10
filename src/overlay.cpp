@@ -55,6 +55,9 @@ static UINT g_keybindVk[4]{};
 static UINT g_keybindMods[4]{};
 static bool g_keybindPrev[4]{};
 static int g_captureKeybind = -1;
+static HHOOK g_keyCaptureHook = nullptr;
+static bool g_keyboardState[256]{};
+static constexpr UINT kKeybindCaptureMessage = WM_APP + 0x3A;
 static const wchar_t* kKeybindNames[] = {L"Screenshot", L"FSR", L"Frame Generation", L"Neural Rendering"};
 static ULONGLONG g_iniCheckAt = 0;
 
@@ -241,62 +244,91 @@ static std::wstring keybindLabel(UINT modifiers, UINT vk) {
   return result;
 }
 
-static void pollKeybindCapture() {
-  if (g_captureKeybind < 0 || g_captureKeybind >= 4) return;
-  if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-    g_captureKeybind = -1;
-    if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
-    return;
-  }
+static bool isModifierKey(UINT vk) {
+  return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL ||
+         vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+         vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU ||
+         vk == VK_LWIN || vk == VK_RWIN;
+}
 
-  // Key capture is global so it runs while the game has focus, but scanning
-  // every virtual key on every rendered frame is unnecessary. Cap this input
-  // scan at 40 Hz; assigned shortcuts themselves are still edge-checked per frame.
-  static ULONGLONG nextScanAt = 0;
-  const ULONGLONG now = GetTickCount64();
-  if (now < nextScanAt) return;
-  nextScanAt = now + 25;
-
+static UINT currentCaptureModifiers() {
+  const auto pressed = [](UINT generic, UINT left, UINT right) {
+    return g_keyboardState[generic] || g_keyboardState[left] || g_keyboardState[right] ||
+           (GetAsyncKeyState((int)generic) & 0x8000) != 0;
+  };
   UINT modifiers = 0;
-  if (GetAsyncKeyState(VK_CONTROL) & 0x8000) modifiers |= MOD_CONTROL;
-  if (GetAsyncKeyState(VK_SHIFT) & 0x8000) modifiers |= MOD_SHIFT;
-  if (GetAsyncKeyState(VK_MENU) & 0x8000) modifiers |= MOD_ALT;
-  if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) modifiers |= MOD_WIN;
-  static bool previous[256]{};
-  for (UINT vk = 1; vk < 256; ++vk) {
-    if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN) continue;
-    const bool down = (GetAsyncKeyState((int)vk) & 0x8000) != 0;
-    const bool pressed = down && !previous[vk];
-    previous[vk] = down;
-    if (!pressed) continue;
-    bool duplicate = false;
-    for (int i = 0; i < 4; ++i)
-      if (i != g_captureKeybind && g_keybindVk[i] == vk && g_keybindMods[i] == modifiers) duplicate = true;
-    if (!duplicate) {
-      g_keybindVk[g_captureKeybind] = vk;
-      g_keybindMods[g_captureKeybind] = modifiers;
-      g_keybindPrev[g_captureKeybind] = true; // do not fire the newly assigned bind on the capture key-down
-      saveCfg();
-      g_saveStatus = L"Keybind saved to scaleconfig.ini";
-    } else {
-      g_saveStatus = L"That key combination is already assigned";
+  if (pressed(VK_CONTROL, VK_LCONTROL, VK_RCONTROL)) modifiers |= MOD_CONTROL;
+  if (pressed(VK_SHIFT, VK_LSHIFT, VK_RSHIFT)) modifiers |= MOD_SHIFT;
+  if (pressed(VK_MENU, VK_LMENU, VK_RMENU)) modifiers |= MOD_ALT;
+  if (g_keyboardState[VK_LWIN] || g_keyboardState[VK_RWIN] ||
+      (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
+    modifiers |= MOD_WIN;
+  return modifiers;
+}
+
+// WH_KEYBOARD_LL receives actual key-down/up events from the active desktop,
+// including when the game owns focus. It never consumes input: every event is
+// passed on to the next hook.
+static LRESULT CALLBACK keybindKeyboardProc(int code, WPARAM message, LPARAM data) {
+  if (code == HC_ACTION && data) {
+    const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
+    const UINT vk = key->vkCode;
+    const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+    const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+
+    if (vk < 256) {
+      if (keyDown) g_keyboardState[vk] = true;
+      else if (keyUp) g_keyboardState[vk] = false;
+
+      if (keyDown && g_captureKeybind >= 0 && g_captureKeybind < 4) {
+        if (vk == VK_ESCAPE) {
+          g_captureKeybind = -1;
+          g_saveStatus = L"Key capture cancelled";
+          if (g_settings) PostMessageW(g_settings, kKeybindCaptureMessage, 0, 0);
+        } else if (!isModifierKey(vk)) {
+          const UINT modifiers = currentCaptureModifiers();
+          bool duplicate = false;
+          for (int i = 0; i < 4; ++i) {
+            if (i != g_captureKeybind && g_keybindVk[i] == vk &&
+                g_keybindMods[i] == modifiers) {
+              duplicate = true;
+              break;
+            }
+          }
+
+          if (duplicate) {
+            g_saveStatus = L"That key combination is already assigned";
+          } else {
+            g_keybindVk[g_captureKeybind] = vk;
+            g_keybindMods[g_captureKeybind] = modifiers;
+            // Avoid firing the freshly captured key-down, but don't leave a
+            // stale edge armed if the key is released before the next frame.
+            g_keybindPrev[g_captureKeybind] = keybindDown(modifiers, vk);
+            g_saveStatus = L"Keybind saved to scaleconfig.ini";
+          }
+          g_captureKeybind = -1;
+          if (g_settings)
+            PostMessageW(g_settings, kKeybindCaptureMessage, duplicate ? 0 : 1, 0);
+        }
+      }
     }
-    g_captureKeybind = -1;
-    if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
-    return;
   }
+  return CallNextHookEx(g_keyCaptureHook, code, message, data);
 }
 
 static void keybindsTab(kit::Panel& p) {
-  p.text(L"Global game-mode shortcuts. These are detected while the game is focused.", false);
-  p.text(L"Click Set, then press a key combination. Press Esc to cancel.");
+  p.text(L"Global game-mode shortcuts. Key capture works while the game is focused.", false);
+  if (g_keyCaptureHook)
+    p.text(L"Click Set, then press a key or combination. Esc cancels. Input is passed through.");
+  else
+    p.text(L"Global keyboard capture is unavailable; Windows could not install the keyboard hook.", false);
   for (int i = 0; i < 4; ++i) {
     p.row(2);
     p.text(kKeybindNames[i], false);
     const std::wstring label = g_captureKeybind == i ? L"Press a key..." : keybindLabel(g_keybindMods[i], g_keybindVk[i]);
     p.text(label.c_str(), false);
     p.row(2);
-    if (p.button(g_captureKeybind == i ? L"Listening..." : L"Set")) {
+    if (g_keyCaptureHook && p.button(g_captureKeybind == i ? L"Listening..." : L"Set")) {
       g_captureKeybind = i;
       g_saveStatus = L"Press the desired key combination";
     }
@@ -774,6 +806,10 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
+  case kKeybindCaptureMessage:
+    if (w) saveCfg();
+    InvalidateRect(h, nullptr, FALSE);
+    return 0;
   case WM_PAINT: {
     PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
     RECT rc{}; GetClientRect(h, &rc);
@@ -844,6 +880,12 @@ bool overlayInit(HINSTANCE inst, HWND output) {
   g_settings = CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST, SET_CLS, L"",
     WS_POPUP, 0, 0, sc(460), sc(700), nullptr, nullptr, inst, nullptr);
 
+  // The low-level hook observes physical keyboard events even while the game
+  // owns focus. Its callback is serviced by this thread's existing message pump.
+  g_keyCaptureHook = SetWindowsHookExW(WH_KEYBOARD_LL, keybindKeyboardProc, inst, 0);
+  if (!g_keyCaptureHook)
+    g_saveStatus = L"Keyboard hook unavailable (Win32 " + std::to_wstring(GetLastError()) + L")";
+
   // Rounded corners on Windows 11 (ignored elsewhere).
   const DWORD round = 2; // DWMWCP_ROUND
   if (g_ui) DwmSetWindowAttribute(g_ui, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &round, sizeof(round));
@@ -857,6 +899,10 @@ bool overlayInit(HINSTANCE inst, HWND output) {
 }
 
 void overlayShutdown() {
+  if (g_keyCaptureHook) {
+    UnhookWindowsHookEx(g_keyCaptureHook);
+    g_keyCaptureHook = nullptr;
+  }
   saveCfg();
   hudStop();
   if (g_ui) DestroyWindow(g_ui);
@@ -902,7 +948,6 @@ static bool comboDown(UINT mods, UINT vk) {
 }
 
 void overlayUpdate(const OverlayFrameStats& st) {
-  pollKeybindCapture();
   for (int i = 0; i < 4; ++i) {
     const bool down = keybindDown(g_keybindMods[i], g_keybindVk[i]);
     if (down && !g_keybindPrev[i]) {
