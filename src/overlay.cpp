@@ -248,6 +248,15 @@ static void pollKeybindCapture() {
     if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
     return;
   }
+
+  // Key capture is global so it runs while the game has focus, but scanning
+  // every virtual key on every rendered frame is unnecessary. Cap this input
+  // scan at 40 Hz; assigned shortcuts themselves are still edge-checked per frame.
+  static ULONGLONG nextScanAt = 0;
+  const ULONGLONG now = GetTickCount64();
+  if (now < nextScanAt) return;
+  nextScanAt = now + 25;
+
   UINT modifiers = 0;
   if (GetAsyncKeyState(VK_CONTROL) & 0x8000) modifiers |= MOD_CONTROL;
   if (GetAsyncKeyState(VK_SHIFT) & 0x8000) modifiers |= MOD_SHIFT;
