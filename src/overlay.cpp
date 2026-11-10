@@ -51,6 +51,16 @@ static int g_hoverBtn = -1;
 static UINT g_toggleMods = 0, g_toggleVk = 0, g_presetMods = 0, g_presetVk = 0;
 static bool g_toggleDown = false, g_presetDown = false;
 static FILETIME g_iniTime{};
+static UINT g_keybindVk[4]{};
+static UINT g_keybindMods[4]{};
+static bool g_keybindPrev[4]{};
+static int g_captureKeybind = -1;
+static HHOOK g_keyCaptureHook = nullptr;
+static bool g_keyboardState[256]{};
+static UINT g_reservedStopVk = 0, g_reservedStopMods = 0;
+static UINT g_reservedOverlayVk = 0, g_reservedOverlayMods = 0;
+static constexpr UINT kKeybindCaptureMessage = WM_APP + 0x3A;
+static const wchar_t* kKeybindNames[] = {L"Screenshot", L"FSR", L"Frame Generation", L"Neural Rendering"};
 static ULONGLONG g_iniCheckAt = 0;
 
 // ── Config (scaleconfig.ini) ──────────────────────────────────────────────
@@ -66,6 +76,14 @@ static void loadCfg() {
   g_frameLimit.fps = frame_limit::clampFps(GetPrivateProfileIntW(L"FrameLimiter", L"fps", 60, ini.c_str()));
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
+  const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
+  for (int i = 0; i < 4; ++i) {
+    wchar_t key[32]{};
+    swprintf_s(key, L"%s_vk", bindNames[i]);
+    g_keybindVk[i] = (UINT)GetPrivateProfileIntW(L"Keybinds", key, 0, ini.c_str());
+    swprintf_s(key, L"%s_modifiers", bindNames[i]);
+    g_keybindMods[i] = (UINT)GetPrivateProfileIntW(L"Keybinds", key, 0, ini.c_str()) & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+  }
   g_dlssNr.enabled = GetPrivateProfileIntW(L"DLSSNR", L"enabled", 0, ini.c_str()) != 0;
   g_dlssNr.newModel = GetPrivateProfileIntW(L"DLSSNR", L"model", 0, ini.c_str()) != 0;
   g_dlssNr.modelScale = std::clamp<int>((int)GetPrivateProfileIntW(L"DLSSNR", L"scale", 100, ini.c_str()), 25, 100) / 100.0f;
@@ -101,6 +119,16 @@ static void saveCfg() {
   swprintf_s(limitValue, L"%d", g_frameLimit.fps); WritePrivateProfileStringW(L"FrameLimiter", L"fps", limitValue, ini.c_str());
   swprintf_s(limitValue, L"%d", g_frameLimit.method); WritePrivateProfileStringW(L"FrameLimiter", L"method", limitValue, ini.c_str());
   WritePrivateProfileStringW(L"FrameGeneration", L"enabled", g_fgEnabled ? L"1" : L"0", ini.c_str());
+  const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
+  for (int i = 0; i < 4; ++i) {
+    wchar_t key[32]{}, value[32]{};
+    swprintf_s(key, L"%s_vk", bindNames[i]);
+    swprintf_s(value, L"%u", g_keybindVk[i]);
+    WritePrivateProfileStringW(L"Keybinds", key, value, ini.c_str());
+    swprintf_s(key, L"%s_modifiers", bindNames[i]);
+    swprintf_s(value, L"%u", g_keybindMods[i]);
+    WritePrivateProfileStringW(L"Keybinds", key, value, ini.c_str());
+  }
   WritePrivateProfileStringW(L"DLSSNR", L"enabled", g_dlssNr.enabled ? L"1" : L"0", ini.c_str());
   WritePrivateProfileStringW(L"DLSSNR", L"model", g_dlssNr.newModel ? L"1" : L"0", ini.c_str());
   wchar_t nrValue[32]{};
@@ -188,6 +216,141 @@ static bool g_dirtyCfg = false, g_dirtyNr = false;
 // Which sections are open: General 0-2, HUD 3-6, NR 8-11 (Performance starts closed), 12 Composition,
 // 13 its look details, 14 Encoding and exposure, 15 its encoding, 16 its preprocess, 17 Fast mode options.
 static bool g_sec[18] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false};
+
+
+static bool keybindDown(UINT modifiers, UINT vk) {
+  if (!vk) return false;
+  const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+  if (((modifiers & MOD_CONTROL) != 0) != down(VK_CONTROL)) return false;
+  if (((modifiers & MOD_SHIFT) != 0) != down(VK_SHIFT)) return false;
+  if (((modifiers & MOD_ALT) != 0) != down(VK_MENU)) return false;
+  if (((modifiers & MOD_WIN) != 0) != (down(VK_LWIN) || down(VK_RWIN))) return false;
+  return down((int)vk);
+}
+
+static std::wstring keybindLabel(UINT modifiers, UINT vk) {
+  if (!vk) return L"Not assigned";
+  std::wstring result;
+  if (modifiers & MOD_CONTROL) result += L"Ctrl + ";
+  if (modifiers & MOD_SHIFT) result += L"Shift + ";
+  if (modifiers & MOD_ALT) result += L"Alt + ";
+  if (modifiers & MOD_WIN) result += L"Win + ";
+  wchar_t name[64]{};
+  const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+  LONG lp = (LONG)(scan << 16);
+  if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN ||
+      vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT ||
+      vk == VK_INSERT || vk == VK_DELETE) lp |= 1 << 24;
+  if (!GetKeyNameTextW(lp, name, 64) || !name[0]) swprintf_s(name, L"VK %02X", vk);
+  result += name;
+  return result;
+}
+
+static bool isModifierKey(UINT vk) {
+  return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL ||
+         vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+         vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU ||
+         vk == VK_LWIN || vk == VK_RWIN;
+}
+
+static UINT currentCaptureModifiers() {
+  UINT modifiers = 0;
+  if (g_keyboardState[VK_CONTROL] || g_keyboardState[VK_LCONTROL] || g_keyboardState[VK_RCONTROL])
+    modifiers |= MOD_CONTROL;
+  if (g_keyboardState[VK_SHIFT] || g_keyboardState[VK_LSHIFT] || g_keyboardState[VK_RSHIFT])
+    modifiers |= MOD_SHIFT;
+  if (g_keyboardState[VK_MENU] || g_keyboardState[VK_LMENU] || g_keyboardState[VK_RMENU])
+    modifiers |= MOD_ALT;
+  if (g_keyboardState[VK_LWIN] || g_keyboardState[VK_RWIN])
+    modifiers |= MOD_WIN;
+  return modifiers;
+}
+
+// WH_KEYBOARD_LL receives actual key-down/up events from the active desktop,
+// including when the game owns focus. It never consumes input: every event is
+// passed on to the next hook.
+static LRESULT CALLBACK keybindKeyboardProc(int code, WPARAM message, LPARAM data) {
+  if (code == HC_ACTION && data) {
+    const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
+    const UINT vk = key->vkCode;
+    const bool keyDown = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+    const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+
+    if (vk < 256) {
+      if (keyDown) g_keyboardState[vk] = true;
+      else if (keyUp) g_keyboardState[vk] = false;
+
+      if (keyDown && g_captureKeybind >= 0 && g_captureKeybind < 4) {
+        if (vk == VK_ESCAPE) {
+          g_captureKeybind = -1;
+          g_saveStatus = L"Key capture cancelled";
+          if (g_settings) PostMessageW(g_settings, kKeybindCaptureMessage, 0, 0);
+        } else if (!isModifierKey(vk)) {
+          const UINT modifiers = currentCaptureModifiers();
+          const bool reservedStop = vk == g_reservedStopVk && modifiers == g_reservedStopMods;
+          const bool reservedOverlay = vk == g_reservedOverlayVk && modifiers == g_reservedOverlayMods;
+          if (reservedStop || reservedOverlay) {
+            g_saveStatus = reservedStop
+                ? L"This is the Force Stop shortcut; choose another combination"
+                : L"This is the Overlay shortcut; choose another combination";
+            // Keep listening. The main loop also suppresses these reserved
+            // actions for as long as capture remains active.
+            if (g_settings)
+              PostMessageW(g_settings, kKeybindCaptureMessage, 0, 0);
+          } else {
+            bool duplicate = false;
+            for (int i = 0; i < 4; ++i) {
+              if (i != g_captureKeybind && g_keybindVk[i] == vk &&
+                  g_keybindMods[i] == modifiers) {
+                duplicate = true;
+                break;
+              }
+            }
+
+            if (duplicate) {
+              g_saveStatus = L"That key combination is already assigned";
+            } else {
+              g_keybindVk[g_captureKeybind] = vk;
+              g_keybindMods[g_captureKeybind] = modifiers;
+              // The captured key is still down; the per-frame edge detector
+              // will observe the release before it can trigger this binding.
+              g_keybindPrev[g_captureKeybind] = true;
+              g_saveStatus = L"Keybind saved to scaleconfig.ini";
+            }
+            g_captureKeybind = -1;
+            if (g_settings)
+              PostMessageW(g_settings, kKeybindCaptureMessage, duplicate ? 0 : 1, 0);
+          }
+        }
+      }
+    }
+  }
+  return CallNextHookEx(g_keyCaptureHook, code, message, data);
+}
+
+static void keybindsTab(kit::Panel& p) {
+  p.text(L"Global game-mode shortcuts. Key capture works while the game is focused.", false);
+  if (g_keyCaptureHook)
+    p.text(L"Click Set, then press a key or combination. Esc cancels. Input is passed through.");
+  else
+    p.text(L"Global keyboard capture is unavailable; Windows could not install the keyboard hook.", false);
+  for (int i = 0; i < 4; ++i) {
+    p.row(2);
+    p.text(kKeybindNames[i], false);
+    const std::wstring label = g_captureKeybind == i ? L"Press a key..." : keybindLabel(g_keybindMods[i], g_keybindVk[i]);
+    p.text(label.c_str(), false);
+    p.row(2);
+    if (g_keyCaptureHook && p.button(g_captureKeybind == i ? L"Listening..." : L"Set")) {
+      g_captureKeybind = i;
+      g_saveStatus = L"Press the desired key combination";
+    }
+    if (p.button(L"Clear")) {
+      g_keybindVk[i] = 0; g_keybindMods[i] = 0; g_keybindPrev[i] = false;
+      saveCfg(); g_saveStatus = L"Keybind cleared";
+    }
+  }
+  p.text(L"Screenshot saves the final upscaled frame as PNG. FSR, FG and NR toggle their respective pipeline stages.");
+}
 
 static void generalTab(kit::Panel& p) {
   if (p.section(L"FSR", &g_sec[0])) {
@@ -522,14 +685,15 @@ static void nrTab(kit::Panel& p) {
 }
 
 static void panelUi(kit::Panel& p) {
-  static const wchar_t* tabs[] = {L"General", L"HUD", L"NR"};
+  static const wchar_t* tabs[] = {L"General", L"HUD", L"NR", L"Keybinds"};
   bool close = false;
-  p.titleBar(L"NRLive", &g_tab, tabs, 3, &close);
+  p.titleBar(L"NRLive", &g_tab, tabs, 4, &close);
   if (close) g_pending = Pending::Close;
   p.beginBody();
   if (g_tab == 0) generalTab(p);
   else if (g_tab == 1) hudTab(p);
-  else nrTab(p);
+  else if (g_tab == 2) nrTab(p);
+  else keybindsTab(p);
   p.status(p.dragging() ? L"Release to save" : g_saveStatus.c_str());
   p.end();
 }
@@ -654,6 +818,10 @@ static LRESULT CALLBACK uiProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 static LRESULT CALLBACK settingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
+  case kKeybindCaptureMessage:
+    if (w == 1) saveCfg();
+    InvalidateRect(h, nullptr, FALSE);
+    return 0;
   case WM_PAINT: {
     PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
     RECT rc{}; GetClientRect(h, &rc);
@@ -724,6 +892,12 @@ bool overlayInit(HINSTANCE inst, HWND output) {
   g_settings = CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST, SET_CLS, L"",
     WS_POPUP, 0, 0, sc(460), sc(700), nullptr, nullptr, inst, nullptr);
 
+  // The low-level hook observes physical keyboard events even while the game
+  // owns focus. Its callback is serviced by this thread's existing message pump.
+  g_keyCaptureHook = SetWindowsHookExW(WH_KEYBOARD_LL, keybindKeyboardProc, inst, 0);
+  if (!g_keyCaptureHook)
+    g_saveStatus = L"Keyboard hook unavailable (Win32 " + std::to_wstring(GetLastError()) + L")";
+
   // Rounded corners on Windows 11 (ignored elsewhere).
   const DWORD round = 2; // DWMWCP_ROUND
   if (g_ui) DwmSetWindowAttribute(g_ui, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &round, sizeof(round));
@@ -737,6 +911,10 @@ bool overlayInit(HINSTANCE inst, HWND output) {
 }
 
 void overlayShutdown() {
+  if (g_keyCaptureHook) {
+    UnhookWindowsHookEx(g_keyCaptureHook);
+    g_keyCaptureHook = nullptr;
+  }
   saveCfg();
   hudStop();
   if (g_ui) DestroyWindow(g_ui);
@@ -782,6 +960,17 @@ static bool comboDown(UINT mods, UINT vk) {
 }
 
 void overlayUpdate(const OverlayFrameStats& st) {
+  for (int i = 0; i < 4; ++i) {
+    const bool down = keybindDown(g_keybindMods[i], g_keybindVk[i]);
+    if (down && !g_keybindPrev[i]) {
+      if (i == 0) g_screenshot = true;
+      else if (i == 1) { g_fsr = !g_fsr; g_toggleFsr = true; }
+      else if (i == 2) { g_fgEnabled = !g_fgEnabled; g_toggleFg = true; saveCfg(); }
+      else if (i == 3) { g_dlssNr.enabled = !g_dlssNr.enabled; g_toggleDlssNr = true; saveCfg(); }
+      if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
+    }
+    g_keybindPrev[i] = down;
+  }
   HudFrame f;
   f.sourceMs = st.sourceMs; f.capture = st.capture; f.output = st.output;
   f.fsr = st.fsr; f.nr = st.nr; f.nrBuild = st.nrBuild; f.fg = g_fgActive; f.latencyMs = st.latencyMs;
@@ -831,6 +1020,15 @@ void overlayUpdate(const OverlayFrameStats& st) {
 void overlaySetAdapter(LUID luid) { hudSetAdapter(luid); }
 void overlaySetCaptureExcluded(bool exclude) { hudSetCaptureExcluded(exclude); }
 bool overlayWantsGpuTimes() { return g_fpsVisible && g_cfg.gpu_times; }
+
+void overlaySetReservedHotkeys(UINT stopModifiers, UINT stopVk, UINT overlayModifiers, UINT overlayVk) {
+  g_reservedStopMods = stopModifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+  g_reservedStopVk = stopVk;
+  g_reservedOverlayMods = overlayModifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+  g_reservedOverlayVk = overlayVk;
+}
+
+bool overlayIsCapturingKeybind() { return g_captureKeybind >= 0 && g_captureKeybind < 4; }
 
 void overlaySetFsrEnabled(bool e) { g_fsr = e; if (g_ui) InvalidateRect(g_ui, nullptr, FALSE); }
 bool overlayConsumeFsrToggle() { bool v = g_toggleFsr; g_toggleFsr = false; return v; }
