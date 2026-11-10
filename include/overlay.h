@@ -54,7 +54,7 @@ void overlayUpdate(const OverlayFrameStats& stats);
 void overlaySetAdapter(LUID luid);           // GPU the HUD reports sensors for
 void overlaySetCaptureExcluded(bool exclude); // hide HUD from desktop capture (DXGI mode)
 bool overlayWantsGpuTimes();
-void overlaySetFsrEnabled(bool enabled);
+void overlaySetFsrEnabled(bool enabled);\n// Keybinds are polled from overlayUpdate so they remain active while the game owns focus.
 bool overlayConsumeFsrToggle();             // returns true once when FSR button clicked
 bool overlayConsumeScreenshot();            // returns true once when Camera button clicked
 bool overlayConsumeFrameLimitToggle();       // returns true once when the CAP button is clicked
