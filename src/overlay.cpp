@@ -50,7 +50,11 @@ static std::wstring g_saveStatus = L"Changes are saved automatically";
 static int g_hoverBtn = -1;
 static UINT g_toggleMods = 0, g_toggleVk = 0, g_presetMods = 0, g_presetVk = 0;
 static bool g_toggleDown = false, g_presetDown = false;
-static FILETIME g_iniTime{};
+static FILETIME g_iniTime{};\nstatic UINT g_keybindVk[4]{};
+static UINT g_keybindMods[4]{};
+static bool g_keybindPrev[4]{};
+static int g_captureKeybind = -1;
+static const wchar_t* kKeybindNames[] = {L"Screenshot", L"FSR", L"Frame Generation", L"Neural Rendering"};
 static ULONGLONG g_iniCheckAt = 0;
 
 // ── Config (scaleconfig.ini) ──────────────────────────────────────────────
@@ -208,12 +212,6 @@ static bool g_dirtyCfg = false, g_dirtyNr = false;
 static bool g_sec[18] = {true, true, true, true, true, true, true, false, true, true, true, false, true, false, false, false, false, false};
 
 
-static UINT g_keybindVk[4]{};
-static UINT g_keybindMods[4]{};
-static bool g_keybindPrev[4]{};
-static int g_captureKeybind = -1;
-static const wchar_t* kKeybindNames[] = {L"Screenshot", L"FSR", L"Frame Generation", L"Neural Rendering"};
-
 static bool keybindDown(UINT modifiers, UINT vk) {
   if (!vk) return false;
   const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
@@ -254,14 +252,13 @@ static void pollKeybindCapture() {
   if (GetAsyncKeyState(VK_SHIFT) & 0x8000) modifiers |= MOD_SHIFT;
   if (GetAsyncKeyState(VK_MENU) & 0x8000) modifiers |= MOD_ALT;
   if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) modifiers |= MOD_WIN;
+  static bool previous[256]{};
   for (UINT vk = 1; vk < 256; ++vk) {
     if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN) continue;
-    if (!(GetAsyncKeyState((int)vk) & 0x8000)) continue;
-    bool wasDown = false;
-    static bool previous[256]{};
-    wasDown = previous[vk];
-    previous[vk] = true;
-    if (wasDown) continue;
+    const bool down = (GetAsyncKeyState((int)vk) & 0x8000) != 0;
+    const bool pressed = down && !previous[vk];
+    previous[vk] = down;
+    if (!pressed) continue;
     bool duplicate = false;
     for (int i = 0; i < 4; ++i)
       if (i != g_captureKeybind && g_keybindVk[i] == vk && g_keybindMods[i] == modifiers) duplicate = true;
