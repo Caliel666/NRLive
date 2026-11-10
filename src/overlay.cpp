@@ -50,7 +50,8 @@ static std::wstring g_saveStatus = L"Changes are saved automatically";
 static int g_hoverBtn = -1;
 static UINT g_toggleMods = 0, g_toggleVk = 0, g_presetMods = 0, g_presetVk = 0;
 static bool g_toggleDown = false, g_presetDown = false;
-static FILETIME g_iniTime{};\nstatic UINT g_keybindVk[4]{};
+static FILETIME g_iniTime{};
+static UINT g_keybindVk[4]{};
 static UINT g_keybindMods[4]{};
 static bool g_keybindPrev[4]{};
 static int g_captureKeybind = -1;
@@ -638,7 +639,8 @@ static void panelUi(kit::Panel& p) {
   p.beginBody();
   if (g_tab == 0) generalTab(p);
   else if (g_tab == 1) hudTab(p);
-  else if (g_tab == 2) nrTab(p);\n  else keybindsTab(p);
+  else if (g_tab == 2) nrTab(p);
+  else keybindsTab(p);
   p.status(p.dragging() ? L"Release to save" : g_saveStatus.c_str());
   p.end();
 }
