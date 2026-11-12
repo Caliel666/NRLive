@@ -55,7 +55,10 @@ public:
 
   // Stretch-blit src (any size, PIXEL/NON_PIXEL SRV state) onto the current
   // backbuffer (must already be in RENDER_TARGET state).
-  void blitToBackbuffer(ID3D12Resource* src);
+  void blitToBackbuffer(ID3D12Resource* src, UINT srvSlot = 0);
+  // Return an RGBA8 display-sized color texture for NGX providers. When the
+  // source already matches that contract, no extra blit is recorded.
+  ID3D12Resource* prepareAnrInput(ID3D12Resource* src);
 
   // Queue a PNG readback of the current backbuffer. Call after the final
   // FSR/blit pass and before end()/present(). present() completes the
@@ -98,6 +101,10 @@ private:
   Size m_render{};
   HWND m_output = nullptr;
 
+  ComPtr<ID3D12Resource> m_anrInput;
+  ComPtr<ID3D12DescriptorHeap> m_anrInputRtvHeap;
+  D3D12_RESOURCE_STATES m_anrInputState = D3D12_RESOURCE_STATE_COMMON;
+
   ComPtr<ID3D12Resource> m_upscaleOutput;
   ComPtr<ID3D12Resource> m_dummyDepth;
   ComPtr<ID3D12Resource> m_motionVectors;
@@ -109,9 +116,14 @@ private:
   ComPtr<ID3D12RootSignature> m_blitRs;
   ComPtr<ID3D12PipelineState> m_blitPso;
 
-  // Cached blit SRV — recreate only when the source resource pointer changes.
-  ID3D12Resource* m_lastBlitSrc = nullptr;
-  DXGI_FORMAT m_lastBlitFmt = DXGI_FORMAT_UNKNOWN;
+  // Cached SRVs use separate slots for the normal blit, ANR's generated
+  // and real outputs, and per-frame ANR input conversions. This avoids
+  // rewriting descriptors still referenced by queued command lists.
+  ID3D12Resource* m_lastBlitSrc[8]{};
+  DXGI_FORMAT m_lastBlitFmt[8] = {
+    DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN,
+    DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN
+  };
 
   // One-shot screenshot readback. Kept alive until present() has submitted
   // the command list and waited for its fence.

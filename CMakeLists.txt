@@ -50,6 +50,7 @@ add_executable(NRLive WIN32
   src/graphics.cpp
   src/capture.cpp
   src/fsr.cpp
+  src/anr_fg.cpp
   src/dlssnr.cpp
   src/dlssnr_stabilizer.cpp
   src/opennr.cpp

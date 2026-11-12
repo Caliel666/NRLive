@@ -40,6 +40,7 @@ static bool g_initialized = false;
 static bool g_toggleFsr = false, g_screenshot = false, g_toggleFrameLimit = false, g_toggleFg = false;
 static OverlayFrameLimitConfig g_frameLimit{};
 static bool g_fgEnabled = false;
+static int g_fgBackend = 0; // 0=FSR, 1=ANR; applied on next launch
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static OverlayDlssNrConfig g_dlssNr{};
@@ -76,6 +77,7 @@ static void loadCfg() {
   g_frameLimit.fps = frame_limit::clampFps(GetPrivateProfileIntW(L"FrameLimiter", L"fps", 60, ini.c_str()));
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
+  g_fgBackend = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str())), 0, 1);
   const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
   for (int i = 0; i < 4; ++i) {
     wchar_t key[32]{};
@@ -119,6 +121,9 @@ static void saveCfg() {
   swprintf_s(limitValue, L"%d", g_frameLimit.fps); WritePrivateProfileStringW(L"FrameLimiter", L"fps", limitValue, ini.c_str());
   swprintf_s(limitValue, L"%d", g_frameLimit.method); WritePrivateProfileStringW(L"FrameLimiter", L"method", limitValue, ini.c_str());
   WritePrivateProfileStringW(L"FrameGeneration", L"enabled", g_fgEnabled ? L"1" : L"0", ini.c_str());
+  wchar_t backendValue[16]{};
+  swprintf_s(backendValue, L"%d", g_fgBackend);
+  WritePrivateProfileStringW(L"FrameGeneration", L"backend", backendValue, ini.c_str());
   const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
   for (int i = 0; i < 4; ++i) {
     wchar_t key[32]{}, value[32]{};
@@ -370,6 +375,19 @@ static void generalTab(kit::Panel& p) {
     if (p.button(L"Choose folder...")) g_pending = Pending::Browse;
     if (p.button(L"Open folder")) g_pending = Pending::OpenFolder;
     p.text(L"The camera button saves the upscaled frame as PNG, without the overlay.");
+  }
+  if (p.section(L"Frame Generation", &g_sec[7])) {
+    static const wchar_t* backends[] = {L"FSR Frame Generation", L"ANR Frame Generation"};
+    if (p.choice(L"Backend", &g_fgBackend, backends, 2,
+        L"Selects NRLive's frame-generation provider. The choice is applied after restarting NRLive.")) {
+      g_dirtyCfg = true;
+    }
+    if (g_fgBackend == 1) {
+      p.text(L"ANR runtime must be placed in the anr folder beside NRLive.exe. See ANR-FG-SETUP.md.");
+      p.text(L"NRLive supplies optical-flow motion vectors and synthetic depth. Output is 2x.");
+    } else {
+      p.text(L"FSR remains the default provider. The FG top-bar switch enables or disables the selected backend.");
+    }
   }
 }
 
@@ -1044,6 +1062,12 @@ void overlaySetDlssNrEnabled(bool enabled) {
   if (g_ui) InvalidateRect(g_ui, nullptr, FALSE);
 }
 bool overlayFgEnabled() { return g_fgEnabled; }
+int overlayFgBackend() { return g_fgBackend; }
+void overlaySetFgBackend(int backend) {
+  g_fgBackend = std::clamp(backend, 0, 1);
+  saveCfg();
+  if (g_settings) InvalidateRect(g_settings, nullptr, FALSE);
+}
 void overlaySetFgEnabled(bool enabled) {
   g_fgEnabled = enabled;
   saveCfg();

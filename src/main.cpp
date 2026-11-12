@@ -1,6 +1,7 @@
 #include "graphics.h"
 #include "capture.h"
 #include "fsr.h"
+#include "anr_fg.h"
 #include "dlssnr.h"
 #include "opennr.h"
 #include "nr_status.h"
@@ -313,35 +314,50 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     setOverlayOpen(false);
     setStatus(out, label.c_str());
 
-    // Create the actual AMD FSR Frame Generation context. The overlay toggle
-    // remains off unless the provider initializes successfully.
+    // The selected provider owns only the FG stage. FSR remains the default;
+    // ANR runs directly as an NGX D3D12 provider on NRLive's own swapchain.
+    const bool anrSelected = spec.frameGenerationBackendExplicit
+        ? spec.frameGenerationBackend == FrameGenerationBackend::Anr
+        : overlayFgBackend() == 1;
+    if (spec.frameGenerationBackendExplicit)
+      overlaySetFgBackend(anrSelected ? 1 : 0);
+
     FsrFrameGeneration fg;
-    // Give the wrapper one owned reference, then drop every reference held by
-    // Graphics before AMD destroys/recreates the swapchain. Keeping m_back[] or
-    // m_swap1 alive here makes the SDK's swapchain replacement fail at runtime.
-    IDXGISwapChain4* fgSwapChain = gfx.swapChain();
-    if (fgSwapChain) fgSwapChain->AddRef();
-    gfx.releaseSwapChainForWrap();
-    bool fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
-    logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError() : L"FSR frame generation init FAILED: " + fg.lastError());
-    if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
-      fg.shutdown();
-      fgOk = false;
-      logMain(L"FSR FG wrapped swapchain adoption failed; rebuilding ordinary swapchain");
-    }
-    if (!fgOk) {
-      // Failed wrap/context creation may have consumed or invalidated the
-      // original DXGI swapchain pointer. Recreate a clean ordinary swapchain
-      // so capture/upscaling remain usable without frame generation.
-      if (!gfx.rebuildSwapChain(display))
-        throw std::runtime_error("could not rebuild DXGI swapchain after FSR FG initialization failed");
-      logMain(L"Ordinary swapchain rebuilt after FSR FG failure");
+    AnrFrameGeneration anr;
+    bool fgOk = false;
+    if (anrSelected) {
+      fgOk = anr.init(gfx.device(), render, display);
+      logMain(fgOk ? L"ANR FG init OK: " + anr.lastError()
+                   : L"ANR FG init FAILED: " + anr.lastError());
+    } else {
+      // Give the FSR wrapper one owned reference, then drop every reference
+      // held by Graphics before AMD replaces the swapchain.
+      IDXGISwapChain4* fgSwapChain = gfx.swapChain();
+      if (fgSwapChain) fgSwapChain->AddRef();
+      gfx.releaseSwapChainForWrap();
+      fgOk = fg.init(gfx.device(), render, display, &fgSwapChain, gfx.queue());
+      logMain(fgOk ? L"FSR frame generation init OK: " + fg.lastError()
+                   : L"FSR frame generation init FAILED: " + fg.lastError());
+      if (fgOk && !gfx.adoptSwapChain(fgSwapChain)) {
+        fg.shutdown();
+        fgOk = false;
+        logMain(L"FSR FG wrapped swapchain adoption failed; rebuilding ordinary swapchain");
+      }
+      if (!fgOk) {
+        if (!gfx.rebuildSwapChain(display))
+          throw std::runtime_error("could not rebuild DXGI swapchain after FSR FG initialization failed");
+        logMain(L"Ordinary swapchain rebuilt after FSR FG failure");
+      }
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
-      printCli(fgOk ? fg.lastError() : L"FSR FG unavailable: " + fg.lastError());
+      if (fgOk)
+        printCli(anrSelected ? anr.lastError() : fg.lastError());
+      else
+        printCli(anrSelected ? L"ANR FG unavailable: " + anr.lastError()
+                             : L"FSR FG unavailable: " + fg.lastError());
     }
 
     FrameLimiter frameLimiter;
@@ -534,13 +550,28 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       lastCs = cs;
       setScaleSizes(cs, display);
       if (!gfx.ensureAuxTextures(cs)) throw std::runtime_error("auxiliary graphics textures could not be resized");
-      if (fgOk && (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
+      if (anrSelected && fgOk &&
+          (cs.w != anr.renderSize().w || cs.h != anr.renderSize().h ||
+           display.w != anr.displaySize().w || display.h != anr.displaySize().h)) {
+        gfx.waitForGpu();
+        if (!anr.resize(cs, display)) {
+          fgOk = false;
+          fgEnabled = false;
+          overlaySetFgEnabled(false);
+          setStatus(out, anr.lastError().c_str());
+          logMain(L"ANR FG resize failed: " + anr.lastError());
+        } else {
+          fgEnabled = overlayFgEnabled();
+          overlaySetFgEnabled(fgEnabled);
+          logMain(L"ANR FG resources resized");
+        }
+        reset = true;
+      } else if (!anrSelected && fgOk &&
+                 (cs.w > fgMaxRender.w || cs.h > fgMaxRender.h)) {
         gfx.waitForGpu();
         const bool resizedFg = fg.resize(cs, display);
         fgMaxRender = cs;
         if (!resizedFg) {
-          // Keep the wrapper alive and configure it off on the next frame;
-          // don't leave a stale generation callback registered.
           fgEnabled = false;
           overlaySetFgEnabled(false);
           setStatus(out, fg.lastError().c_str());
@@ -576,7 +607,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       ID3D12Resource* nrOutputForFrame = nullptr;
       D3D12_RESOURCE_STATES nrOutputRestState = D3D12_RESOURCE_STATE_COMMON;
       bool motionRan = false;
-      if (fsrEnabled && depth && mv && upscale) {
+      if ((fsrEnabled || (anrSelected && fgEnabled)) && depth && mv && upscale) {
         // ---- Batch A: pre-OF+FSR prep -------------------------------------
         //   color:   COMMON  -> PS|NPS   (FSR & AMDOF read as SRV)
         //   depth:   UAV     -> PS|NPS   (FSR reads as SRV)
@@ -707,7 +738,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         if (nrOutputForFrame) gpuTimer.mark(cmd, GpuTimer::Nr);
         ID3D12Resource* fsrInputColour = nrStabilizedColour ? nrStabilizedColour :
             (nrOutputForFrame ? nrOutputForFrame : color.Get());
-        usedFsr = motionReady && fsrOk && fsr.dispatch(cmd, fsrInputColour, depth, mv,
+        usedFsr = fsrEnabled && motionReady && fsrOk && fsr.dispatch(cmd, fsrInputColour, depth, mv,
                                               reactiveReady ? reactive : nullptr,
                                               upscale, cs, display, dt, reset);
         if (usedFsr) gpuTimer.mark(cmd, GpuTimer::Fsr);
@@ -765,12 +796,88 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         cmd->ResourceBarrier(n, b);
       }
 
-      // The FFX frame-interpolation swapchain owns generation and pacing.
-      // Configure every output frame, but only prepare when FSR inputs are valid.
-      // Native scaling has no upscaler pass, but FG still has the frame's motion.
-      const bool runFgThisFrame = fgEnabled && fgOk && (usedFsr || (!upscalerChoice.ffx && motionRan)) && depth && mv;
+      // Both providers consume the post-upscale color plus NRLive's estimated
+      // depth and motion. ANR's provider returns two textures; NRLive presents
+      // the interpolated frame first, then the real frame (2x output).
+      const bool runFgThisFrame = fgEnabled && fgOk &&
+          (anrSelected ? motionRan : (usedFsr || (!upscalerChoice.ffx && motionRan))) && depth && mv;
       bool fgPrepared = true;
-      if (fgOk) {
+      bool anrGeneratedThisFrame = false;
+      ID3D12Resource* anrInput = nullptr;
+      if (anrSelected && fgOk && runFgThisFrame) {
+        anrInput = gfx.prepareAnrInput(presentSrc);
+        if (!anrInput) {
+          fgOk = false;
+          fgEnabled = false;
+          overlaySetFgEnabled(false);
+          setStatus(out, L"ANR FG could not prepare a display-size RGBA input texture");
+          logMain(L"ANR FG input normalization failed");
+        }
+      }
+      if (anrSelected && fgOk && runFgThisFrame &&
+          (!anr.backbufferFormatMatches(anrInput) || anr.needsFeatureCreate())) {
+        // Flush the just-recorded capture/upscale work before releasing or
+        // recreating ANR's output textures and NGX feature for a new format.
+        const bool formatChanged = !anr.backbufferFormatMatches(anrInput);
+        gfx.waitForGpu();
+        gfx.begin();
+        if (formatChanged && !anr.setBackbufferFormat(anrInput)) {
+          fgOk = false;
+          fgEnabled = false;
+          overlaySetFgEnabled(false);
+          setStatus(out, anr.lastError().c_str());
+          logMain(L"ANR FG format setup failed: " + anr.lastError());
+        }
+        if (fgOk && anr.needsFeatureCreate()) {
+          if (!anr.createFeature(gfx.cmd())) {
+            fgOk = false;
+            fgEnabled = false;
+            overlaySetFgEnabled(false);
+            setStatus(out, anr.lastError().c_str());
+            logMain(L"ANR FG feature creation failed: " + anr.lastError());
+          } else {
+            gfx.waitForGpu();
+            gfx.begin();
+          }
+        }
+      }
+      // Feature creation can flush and reopen Graphics' command list. Refresh
+      // the pointer before recording the NGX evaluation and input barriers.
+      cmd = gfx.cmd();
+      if (anrSelected) {
+        if (fgOk && runFgThisFrame) {
+          D3D12_RESOURCE_BARRIER toRead[2]{};
+          ID3D12Resource* inputs[2] = { depth, mv };
+          for (int i = 0; i < 2; ++i) {
+            toRead[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toRead[i].Transition.pResource = inputs[i];
+            toRead[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toRead[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+          }
+          cmd->ResourceBarrier(2, toRead);
+          fgPrepared = anr.evaluate(cmd, anrInput, depth, mv, resetThisFrame);
+          D3D12_RESOURCE_BARRIER toWrite[2]{};
+          for (int i = 0; i < 2; ++i) {
+            toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toWrite[i].Transition.pResource = inputs[i];
+            toWrite[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            toWrite[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+          }
+          cmd->ResourceBarrier(2, toWrite);
+          // The first frame after a reset seeds ANR's temporal history. Do not
+          // present that frame's interpolation output until a valid pair exists.
+          anrGeneratedThisFrame = fgPrepared && !resetThisFrame;
+          if (!fgPrepared) {
+            fgEnabled = false;
+            fgOk = false;
+            overlaySetFgEnabled(false);
+            setStatus(out, anr.lastError().c_str());
+            logMain(L"ANR FG evaluation failed: " + anr.lastError());
+          }
+        }
+      } else if (fgOk) {
         if (runFgThisFrame) {
           D3D12_RESOURCE_BARRIER toRead[2]{};
           ID3D12Resource* inputs[2] = { depth, mv };
@@ -806,15 +913,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         }
       }
 
-      overlaySetFgActive(runFgThisFrame && fgPrepared && !fg.failed());
+      overlaySetFgActive(runFgThisFrame && fgPrepared &&
+                         (anrSelected ? anrGeneratedThisFrame : !fg.failed()));
 
+      const bool presentAnrFrame = anrSelected && anrGeneratedThisFrame;
       const float clear[4] = { 0, 0, 0, 1 };
       cmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
-      gfx.blitToBackbuffer(presentSrc);
+      if (presentAnrFrame)
+        gfx.blitToBackbuffer(anr.generatedFrame(), 1);
+      else
+        gfx.blitToBackbuffer(presentSrc);
 
-      // Capture the actual presentation surface, after FSR3 and the final
-      // stretch blit. The overlay is a separate window, so it is excluded.
-      if (screenshotRequested)
+      // For ANR, the screenshot is taken from the real frame in the second
+      // present below. FSR and ordinary presentation retain the existing path.
+      if (screenshotRequested && !presentAnrFrame)
         gfx.captureBackbufferScreenshot(overlayScreenshotPath(), cap.totalFrames());
 
       // ---- Batch D: post-blit backbuffer + colour restore -----------------
@@ -849,8 +961,46 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
       gfx.present();
+
+      if (presentAnrFrame) {
+        // The output swapchain is owned by NRLive. Submit the generated texture
+        // as one display frame, then the provider's real-frame texture as the
+        // second display frame. Queue ordering keeps both presents in sequence.
+        gfx.begin();
+        auto* realCmd = gfx.cmd();
+        auto* realBack = gfx.backbuffer();
+        D3D12_RESOURCE_BARRIER toRender{};
+        toRender.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toRender.Transition.pResource = realBack;
+        toRender.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toRender.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        toRender.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        realCmd->ResourceBarrier(1, &toRender);
+        realCmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
+        gfx.blitToBackbuffer(anr.realFrame(), 2);
+        if (screenshotRequested)
+          gfx.captureBackbufferScreenshot(overlayScreenshotPath(), cap.totalFrames());
+        D3D12_RESOURCE_BARRIER toPresent{};
+        toPresent.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toPresent.Transition.pResource = realBack;
+        toPresent.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toPresent.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+        realCmd->ResourceBarrier(1, &toPresent);
+        gfx.end();
+        gfx.present();
+      }
+
       openNr.retire(); // its consumer list went with Present
-      if (fgOk && fg.failed()) {
+      if (anrSelected && anr.failed()) {
+        fgEnabled = false;
+        fgOk = false;
+        overlaySetFgEnabled(false);
+        if (cliMode && hasConsole())
+          printCli(L"ANR FG disabled after generation failure: " + anr.lastError());
+        setStatus(out, anr.lastError().c_str());
+        logMain(L"ANR FG stopped after failure: " + anr.lastError());
+      } else if (!anrSelected && fgOk && fg.failed()) {
         fgEnabled = false;
         overlaySetFgEnabled(false);
         if (cliMode && hasConsole())
@@ -924,7 +1074,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     openNr.shutdown();
     fastmv.shutdown();
     amdof.shutdown();
-    fg.shutdown();
+    if (anrSelected)
+      anr.shutdown();
+    else
+      fg.shutdown();
     fsr.shutdown();
     overlayShutdown();
     cap.stop();

@@ -349,6 +349,8 @@ std::wstring targetUsage()
         L"  NRLive.exe --upscaler fsr4|fsr31|none\n"
         L"                                  upscaler after capture and DLSSNR (default: fsr4;\n"
         L"                                  none stretches the frame to the output)\n"
+        L"  NRLive.exe --fg fsr|anr         select the frame-generation provider\n"
+        L"                                  (default: fsr; ANR requires its runtime in .\\anr)\n"
         L"  NRLive.exe --bindbypass home,insert,end,pageup,pagedown\n"
         L"                                  OptiScaler/ReShade menu keys (not sent to game).\n"
         L"                                  Default: Home,Insert,End,PageUp,PageDown.\n"
@@ -459,6 +461,18 @@ bool parseTargetArgs(int argc, wchar_t** argv, TargetSpec& spec, std::wstring& e
             const UpscalerInfo* u = findUpscaler(value);
             if (!u) { error = L"invalid upscaler: " + value + L" (valid: " + upscalerIds() + L")"; return false; }
             spec.upscaler = u->kind;
+        } else if (opt == L"--fg" || opt == L"-fg") {
+            if (!need(value)) return false;
+            const std::wstring backend = lower(value);
+            if (backend == L"fsr") {
+                spec.frameGenerationBackend = FrameGenerationBackend::Fsr;
+            } else if (backend == L"anr") {
+                spec.frameGenerationBackend = FrameGenerationBackend::Anr;
+            } else {
+                error = L"invalid frame generation backend: " + value + L" (valid: fsr, anr)";
+                return false;
+            }
+            spec.frameGenerationBackendExplicit = true;
         } else if (opt == L"--trace" || opt == L"-trace") {
             if (!need(value)) return false;
             spec.tracePath = value;

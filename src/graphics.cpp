@@ -103,31 +103,138 @@ bool Graphics::createBlitPipeline()
   return true;
 }
 
-void Graphics::blitToBackbuffer(ID3D12Resource* src)
+ID3D12Resource* Graphics::prepareAnrInput(ID3D12Resource* src)
 {
-  if (!src || !m_blitPso) return;
+  if (!src || !m_dev || !cmd() || !m_blitPso || !m_srvHeap)
+    return nullptr;
 
-  // SRV for src — recreate only when the source resource pointer or format
-  // changes (color and upscale are the only two callers, so this caches
-  // stably most frames).
-  D3D12_RESOURCE_DESC srcDesc = src->GetDesc();
-  if (src != m_lastBlitSrc || srcDesc.Format != m_lastBlitFmt) {
+  const D3D12_RESOURCE_DESC srcDesc = src->GetDesc();
+  if (srcDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      !srcDesc.Width || !srcDesc.Height || srcDesc.SampleDesc.Count != 1)
+    return nullptr;
+
+  // NGX's DLSS-G input and outputs use a single matching display-size format.
+  // FSR's output is already RGBA8 at display resolution, so it can be consumed
+  // directly. Capture surfaces are BGRA8 and may be render-size, so normalize
+  // them through this fullscreen blit before passing them to ANR.
+  if (srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM &&
+      srcDesc.Width == m_display.w && srcDesc.Height == m_display.h)
+    return src;
+
+  if (!m_anrInput || m_anrInput->GetDesc().Width != m_display.w ||
+      m_anrInput->GetDesc().Height != m_display.h) {
+    m_anrInput.Reset();
+    m_anrInputRtvHeap.Reset();
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = m_display.w;
+    desc.Height = m_display.h;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heap.CreationNodeMask = 1;
+    heap.VisibleNodeMask = 1;
+    if (FAILED(m_dev->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&m_anrInput))))
+      return nullptr;
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};
+    rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvDesc.NumDescriptors = 1;
+    if (FAILED(m_dev->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&m_anrInputRtvHeap)))) {
+      m_anrInput.Reset();
+      return nullptr;
+    }
+    m_dev->CreateRenderTargetView(m_anrInput.Get(), nullptr,
+                                  m_anrInputRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    m_anrInputState = D3D12_RESOURCE_STATE_COMMON;
+  }
+
+  // Reuse the normal blit's first SRV descriptor.
+  const UINT inputSrvSlot = 3 + m_frameSlot;
+  if (src != m_lastBlitSrc[inputSrvSlot] || srcDesc.Format != m_lastBlitFmt[inputSrvSlot]) {
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Format = srcDesc.Format;
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Texture2D.MipLevels = 1;
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(inputSrvSlot) * m_srvStride;
     m_dev->CreateShaderResourceView(src, &srv, cpu);
-    m_lastBlitSrc = src;
-    m_lastBlitFmt = srcDesc.Format;
+    m_lastBlitSrc[inputSrvSlot] = src;
+    m_lastBlitFmt[inputSrvSlot] = srcDesc.Format;
+  }
+
+  D3D12_RESOURCE_BARRIER toTarget{};
+  toTarget.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toTarget.Transition.pResource = m_anrInput.Get();
+  toTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  toTarget.Transition.StateBefore = m_anrInputState;
+  toTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+  cmd()->ResourceBarrier(1, &toTarget);
+
+  ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
+  cmd()->SetDescriptorHeaps(1, heaps);
+  cmd()->SetGraphicsRootSignature(m_blitRs.Get());
+  cmd()->SetPipelineState(m_blitPso.Get());
+  D3D12_GPU_DESCRIPTOR_HANDLE inputGpu = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  inputGpu.ptr += static_cast<UINT64>(inputSrvSlot) * m_srvStride;
+  cmd()->SetGraphicsRootDescriptorTable(0, inputGpu);
+
+  D3D12_VIEWPORT vp{ 0, 0, static_cast<float>(m_display.w), static_cast<float>(m_display.h), 0, 1 };
+  D3D12_RECT sc{ 0, 0, static_cast<LONG>(m_display.w), static_cast<LONG>(m_display.h) };
+  cmd()->RSSetViewports(1, &vp);
+  cmd()->RSSetScissorRects(1, &sc);
+  const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_anrInputRtvHeap->GetCPUDescriptorHandleForHeapStart();
+  cmd()->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+  cmd()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  cmd()->DrawInstanced(3, 1, 0, 0);
+
+  D3D12_RESOURCE_BARRIER toShaderRead{};
+  toShaderRead.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toShaderRead.Transition.pResource = m_anrInput.Get();
+  toShaderRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  toShaderRead.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+  toShaderRead.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  cmd()->ResourceBarrier(1, &toShaderRead);
+  m_anrInputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  return m_anrInput.Get();
+}
+
+void Graphics::blitToBackbuffer(ID3D12Resource* src, UINT srvSlot)
+{
+  if (!src || !m_blitPso || srvSlot >= 8) return;
+
+  // Keep the normal FSR path on slot 0. ANR's generated and real frame blits
+  // use dedicated slots because both lists may be in flight simultaneously.
+  D3D12_RESOURCE_DESC srcDesc = src->GetDesc();
+  if (src != m_lastBlitSrc[srvSlot] || srcDesc.Format != m_lastBlitFmt[srvSlot]) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Format = srcDesc.Format;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(srvSlot) * m_srvStride;
+    m_dev->CreateShaderResourceView(src, &srv, cpu);
+    m_lastBlitSrc[srvSlot] = src;
+    m_lastBlitFmt[srvSlot] = srcDesc.Format;
   }
 
   ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
   cmd()->SetDescriptorHeaps(1, heaps);
   cmd()->SetGraphicsRootSignature(m_blitRs.Get());
   cmd()->SetPipelineState(m_blitPso.Get());
-  cmd()->SetGraphicsRootDescriptorTable(0, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+  D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  gpu.ptr += static_cast<UINT64>(srvSlot) * m_srvStride;
+  cmd()->SetGraphicsRootDescriptorTable(0, gpu);
 
   D3D12_VIEWPORT vp{ 0, 0, (float)m_display.w, (float)m_display.h, 0, 1 };
   D3D12_RECT sc{ 0, 0, (LONG)m_display.w, (LONG)m_display.h };
@@ -292,8 +399,10 @@ void Graphics::releaseSwapChainForWrap()
   m_swap1.Reset();
   m_swap.Reset();
   m_index = 0;
-  m_lastBlitSrc = nullptr;
-  m_lastBlitFmt = DXGI_FORMAT_UNKNOWN;
+  for (UINT i = 0; i < 8; ++i) {
+    m_lastBlitSrc[i] = nullptr;
+    m_lastBlitFmt[i] = DXGI_FORMAT_UNKNOWN;
+  }
 }
 
 bool Graphics::rebuildSwapChain(Size display)
@@ -327,8 +436,10 @@ bool Graphics::resize(Size display)
   for (auto& b : m_back) b.Reset();
   m_upscaleOutput.Reset();
   m_swap1.Reset(); m_swap.Reset();
-  m_lastBlitSrc = nullptr;     // cached SRV is stale after swapchain rebuild
-  m_lastBlitFmt = DXGI_FORMAT_UNKNOWN;
+  for (UINT i = 0; i < 8; ++i) {
+    m_lastBlitSrc[i] = nullptr;
+    m_lastBlitFmt[i] = DXGI_FORMAT_UNKNOWN;
+  } // cached SRVs are stale after swapchain rebuild
   return buildSwapChain(display);
 }
 

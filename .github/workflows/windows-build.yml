@@ -143,6 +143,7 @@ jobs:
           Copy-Item "docs/OPENNR-RUNTIME.md" "$package/opennr/README.md" -Force
           Copy-Item "$package/opennr/dlssnr-amd/LICENSE-DLSSNR-AMD.txt" "$package/DLSSNR-AMD-LICENSE.txt" -Force
           Copy-Item "docs/DLSSNR-AMD-SETUP.txt" "$package/DLSSNR-AMD-SETUP.txt" -Force
+          Copy-Item "docs/ANR-FG-SETUP.md" "$package/ANR-FG-SETUP.md" -Force
           Copy-Item "version.txt" "$package/version.txt" -Force
 
           foreach ($file in @(
@@ -153,7 +154,8 @@ jobs:
             "opennr/MochizukiNrRuntime.dll",
             "opennr/dlssnr-amd/shaders",
             "DLSSNR-AMD-LICENSE.txt",
-            "DLSSNR-AMD-SETUP.txt"
+            "DLSSNR-AMD-SETUP.txt",
+            "ANR-FG-SETUP.md"
           )) {
             if (-not (Test-Path (Join-Path $package $file))) { throw "Portable package is missing $file" }
           }

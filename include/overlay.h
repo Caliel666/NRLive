@@ -68,6 +68,8 @@ bool overlayConsumeDlssNrToggle();            // returns true once when the NR b
 const OverlayDlssNrConfig& overlayDlssNrConfig();
 void overlaySetDlssNrEnabled(bool enabled);
 bool overlayFgEnabled();
+int overlayFgBackend(); // 0=FSR, 1=ANR; applied on the next launch
+void overlaySetFgBackend(int backend);
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);
