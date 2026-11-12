@@ -12,13 +12,21 @@ struct Size { uint32_t w = 0, h = 0; };
 
 class Graphics {
 public:
+  Graphics() = default;
+  ~Graphics();
+  Graphics(const Graphics&) = delete;
+  Graphics& operator=(const Graphics&) = delete;
+
   bool init(HWND output, Size render, Size display);
   bool resize(Size display);
   // Release all app-owned references before AMD replaces the swapchain.
   void releaseSwapChainForWrap();
   bool rebuildSwapChain(Size display);
   bool adoptSwapChain(IDXGISwapChain4* wrapped);
-  bool begin();
+  // Recreate the ordinary swapchain with DXGI's frame-latency waitable object.
+  // Used by ANR to keep generated-frame presentation queue depth at one.
+  bool enableFramePacing();
+  bool begin(bool clearSyntheticDepth = true);
   // Submit the current prep command list and open a second list for the same frame.
   // Used to place the cross-API DLSSNR pass between motion generation and FSR without a CPU wait.
   bool submitForInterop();
@@ -69,12 +77,15 @@ private:
   bool buildSwapChain(Size display);
   bool createAuxTextures(Size render);
   bool createBlitPipeline();
+  void closeFrameLatencyHandle();
 
   ComPtr<ID3D12Device> m_dev;
   ComPtr<ID3D12CommandQueue> m_queue;
   ComPtr<IDXGIFactory6> m_factory;
   ComPtr<IDXGISwapChain1> m_swap1;
   ComPtr<IDXGISwapChain4> m_swap;
+  HANDLE m_frameLatencyWaitableObject = nullptr;
+  bool m_framePacingEnabled = false;
   ComPtr<ID3D12DescriptorHeap> m_rtv;
   ComPtr<ID3D12DescriptorHeap> m_srvHeap;
   ComPtr<ID3D12CommandAllocator> m_alloc[3];

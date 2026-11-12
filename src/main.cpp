@@ -350,6 +350,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       }
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
+    if (anrSelected && fgEnabled && !gfx.enableFramePacing())
+      logMain(L"ANR FG: DXGI frame-latency waitable pacing unavailable; continuing without it");
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
     if (cliMode && hasConsole()) {
@@ -361,6 +363,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     }
 
     FrameLimiter frameLimiter;
+    uint32_t lastAnrMultiFrameCount = static_cast<uint32_t>(overlayAnrMultiFrameCount());
     bool reset = true, running = true;
     bool capturePausedForFocus = false;
     bool wasOverlayOpen = false;
@@ -437,6 +440,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       if (overlayConsumeFgToggle()) {
         fgEnabled = fgOk && overlayFgEnabled();
         overlaySetFgEnabled(fgEnabled);
+        reset = true;
+      }
+      const uint32_t anrMultiFrameCount =
+          static_cast<uint32_t>(overlayAnrMultiFrameCount());
+      if (anrSelected && anrMultiFrameCount != lastAnrMultiFrameCount) {
+        lastAnrMultiFrameCount = anrMultiFrameCount;
         reset = true;
       }
       // Camera requests are consumed only once a fresh capture frame is
@@ -856,7 +865,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
             toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
           }
           cmd->ResourceBarrier(2, toRead);
-          fgPrepared = anr.evaluate(cmd, anrInput, depth, mv, resetThisFrame);
+          fgPrepared = anr.evaluate(cmd, anrInput, depth, mv, resetThisFrame,
+                                    anrMultiFrameCount, 1);
           D3D12_RESOURCE_BARRIER toWrite[2]{};
           for (int i = 0; i < 2; ++i) {
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -963,9 +973,69 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.present();
 
       if (presentAnrFrame) {
-        // The output swapchain is owned by NRLive. Submit the generated texture
-        // as one display frame, then the provider's real-frame texture as the
-        // second display frame. Queue ordering keeps both presents in sequence.
+        // NGX returns one generated image per MultiFrameIndex. Re-evaluate the
+        // same source pair for indices 2..N, preserving synthetic depth between
+        // lists, and present each output before asking NGX for the next one.
+        bool anrRealOutputReady = true;
+        for (uint32_t multiFrameIndex = 2;
+             multiFrameIndex <= anrMultiFrameCount; ++multiFrameIndex) {
+          gfx.begin(false); // do not clear the synthetic depth between MFG indices
+          auto* multiCmd = gfx.cmd();
+          D3D12_RESOURCE_BARRIER toRead[2]{};
+          ID3D12Resource* inputs[2] = { depth, mv };
+          for (int i = 0; i < 2; ++i) {
+            toRead[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toRead[i].Transition.pResource = inputs[i];
+            toRead[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toRead[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+          }
+          multiCmd->ResourceBarrier(2, toRead);
+          const bool generated = anr.evaluate(multiCmd, anrInput, depth, mv, false,
+                                               anrMultiFrameCount, multiFrameIndex);
+          D3D12_RESOURCE_BARRIER toWrite[2]{};
+          for (int i = 0; i < 2; ++i) {
+            toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toWrite[i].Transition.pResource = inputs[i];
+            toWrite[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            toWrite[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+          }
+          multiCmd->ResourceBarrier(2, toWrite);
+          if (!generated) {
+            anrRealOutputReady = false;
+            fgEnabled = false;
+            fgOk = false;
+            overlaySetFgEnabled(false);
+            setStatus(out, anr.lastError().c_str());
+            logMain(L"ANR FG multi-frame evaluation failed: " + anr.lastError());
+            gfx.end(); // discard this unsubmitted list; resource transitions never execute
+            break;
+          }
+
+          auto* multiBack = gfx.backbuffer();
+          D3D12_RESOURCE_BARRIER toRender{};
+          toRender.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+          toRender.Transition.pResource = multiBack;
+          toRender.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+          toRender.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+          toRender.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+          multiCmd->ResourceBarrier(1, &toRender);
+          multiCmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
+          gfx.blitToBackbuffer(anr.generatedFrame(), 1);
+          D3D12_RESOURCE_BARRIER toPresent{};
+          toPresent.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+          toPresent.Transition.pResource = multiBack;
+          toPresent.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+          toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+          toPresent.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+          multiCmd->ResourceBarrier(1, &toPresent);
+          gfx.end();
+          gfx.present();
+        }
+
+        // Present the provider's real source-frame texture last. If an extra
+        // MFG evaluation failed, use NRLive's original source and disable ANR.
         gfx.begin();
         auto* realCmd = gfx.cmd();
         auto* realBack = gfx.backbuffer();
@@ -977,7 +1047,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         toRender.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
         realCmd->ResourceBarrier(1, &toRender);
         realCmd->ClearRenderTargetView(gfx.rtvHandle(), clear, 0, nullptr);
-        gfx.blitToBackbuffer(anr.realFrame(), 2);
+        gfx.blitToBackbuffer(anrRealOutputReady ? anr.realFrame() : presentSrc,
+                             anrRealOutputReady ? 2 : 0);
         if (screenshotRequested)
           gfx.captureBackbufferScreenshot(overlayScreenshotPath(), cap.totalFrames());
         D3D12_RESOURCE_BARRIER toPresent{};

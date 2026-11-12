@@ -400,7 +400,9 @@ bool AnrFrameGeneration::evaluate(ID3D12GraphicsCommandList* commandList,
                                   ID3D12Resource* backbuffer,
                                   ID3D12Resource* depth,
                                   ID3D12Resource* motion,
-                                  bool reset) {
+                                  bool reset,
+                                  uint32_t multiFrameCount,
+                                  uint32_t multiFrameIndex) {
   if (!ready() || !commandList || !backbuffer || !depth || !motion)
     return fail(L"ANR FG: missing feature, command list, color, depth, or motion-vector input");
 
@@ -424,10 +426,14 @@ bool AnrFrameGeneration::evaluate(ID3D12GraphicsCommandList* commandList,
   m_parameters->Set(kBackbufferFormat, static_cast<unsigned int>(m_format));
   m_parameters->Set(kInternalWidth, m_render.w);
   m_parameters->Set(kInternalHeight, m_render.h);
+  multiFrameCount = std::clamp(multiFrameCount, 1u, 5u);
+  multiFrameIndex = std::clamp(multiFrameIndex, 1u, multiFrameCount);
   m_parameters->Set(kReset, reset ? 1u : 0u);
-  m_parameters->Set(kMultiFrameCount, 1u);
-  m_parameters->Set(kMultiFrameIndex, 1u);
-  m_parameters->Set(kBackbufferFrameId, ++m_frameId);
+  m_parameters->Set(kMultiFrameCount, multiFrameCount);
+  m_parameters->Set(kMultiFrameIndex, multiFrameIndex);
+  if (multiFrameIndex == 1)
+    ++m_frameId;
+  m_parameters->Set(kBackbufferFrameId, m_frameId);
 
   m_parameters->Set(kBackbuffer, backbuffer);
   m_parameters->Set(kDepth, depth);

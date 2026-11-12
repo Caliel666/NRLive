@@ -322,6 +322,19 @@ bool Graphics::ensureAuxTextures(Size render)
   return createAuxTextures(render);
 }
 
+Graphics::~Graphics()
+{
+  closeFrameLatencyHandle();
+}
+
+void Graphics::closeFrameLatencyHandle()
+{
+  if (m_frameLatencyWaitableObject) {
+    CloseHandle(m_frameLatencyWaitableObject);
+    m_frameLatencyWaitableObject = nullptr;
+  }
+}
+
 bool Graphics::buildSwapChain(Size display)
 {
   DXGI_SWAP_CHAIN_DESC1 s{};
@@ -335,11 +348,20 @@ bool Graphics::buildSwapChain(Size display)
   s.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   s.SampleDesc.Count = 1;
   s.Scaling = DXGI_SCALING_STRETCH;
+  s.Flags = m_framePacingEnabled ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0;
 
   ComPtr<IDXGISwapChain1> sw;
   hr(m_factory->CreateSwapChainForHwnd(m_queue.Get(), m_output, &s, nullptr, nullptr, &sw));
   m_swap1 = sw;
   hr(m_swap1.As(&m_swap));
+  closeFrameLatencyHandle();
+  if (m_framePacingEnabled) {
+    ComPtr<IDXGISwapChain2> latencySwap;
+    if (SUCCEEDED(m_swap.As(&latencySwap)) &&
+        SUCCEEDED(latencySwap->SetMaximumFrameLatency(1))) {
+      m_frameLatencyWaitableObject = latencySwap->GetFrameLatencyWaitableObject();
+    }
+  }
   m_factory->MakeWindowAssociation(m_output, DXGI_MWA_NO_ALT_ENTER);
 
   m_display = display;
@@ -392,6 +414,7 @@ bool Graphics::buildSwapChain(Size display)
 
 void Graphics::releaseSwapChainForWrap()
 {
+  closeFrameLatencyHandle();
   // AMD's frame-interpolation wrapper releases the original swapchain and
   // recreates it for the same HWND. DXGI requires every backbuffer reference
   // and every app-owned swapchain interface to be released first.
@@ -409,6 +432,30 @@ bool Graphics::rebuildSwapChain(Size display)
 {
   releaseSwapChainForWrap();
   return buildSwapChain(display);
+}
+
+bool Graphics::enableFramePacing()
+{
+  if (m_framePacingEnabled && m_frameLatencyWaitableObject)
+    return true;
+  if (!m_swap || !m_factory || !m_queue || !waitForGpu())
+    return false;
+
+  m_framePacingEnabled = true;
+  releaseSwapChainForWrap();
+  if (!buildSwapChain(m_display)) {
+    m_framePacingEnabled = false;
+    return false;
+  }
+  if (m_frameLatencyWaitableObject)
+    return true;
+
+  // Older drivers may expose IDXGISwapChain2 but not the waitable handle.
+  // Rebuild a normal chain and keep ANR functional without the pacing aid.
+  m_framePacingEnabled = false;
+  releaseSwapChainForWrap();
+  buildSwapChain(m_display);
+  return false;
 }
 
 bool Graphics::adoptSwapChain(IDXGISwapChain4* wrapped)
@@ -433,6 +480,7 @@ bool Graphics::adoptSwapChain(IDXGISwapChain4* wrapped)
 bool Graphics::resize(Size display)
 {
   if (display.w == m_display.w && display.h == m_display.h) return true;
+  closeFrameLatencyHandle();
   for (auto& b : m_back) b.Reset();
   m_upscaleOutput.Reset();
   m_swap1.Reset(); m_swap.Reset();
@@ -479,7 +527,7 @@ bool Graphics::init(HWND output, Size render, Size display)
   return true;
 }
 
-bool Graphics::begin()
+bool Graphics::begin(bool clearSyntheticDepth)
 {
   // Wait only when this CPU command-allocator slot is about to be reused.
   // Do not key allocator lifetime to the wrapped swapchain's backbuffer index:
@@ -496,7 +544,7 @@ bool Graphics::begin()
   // The capture pipeline has no real game depth. Always clear the synthetic
   // depth to deterministic far depth before FSR sees it; an uninitialized
   // UAV here was a major source of temporal instability/smearing.
-  if (m_dummyDepth && m_clearGpuHeap && m_clearCpuHeap) {
+  if (clearSyntheticDepth && m_dummyDepth && m_clearGpuHeap && m_clearCpuHeap) {
     ID3D12DescriptorHeap* heaps[] = { m_clearGpuHeap.Get() };
     cmd()->SetDescriptorHeaps(1, heaps);
     const FLOAT value[4] = { 0.f, 0.f, 0.f, 0.f };
@@ -756,6 +804,17 @@ static bool writeScreenshotPng(const std::wstring& folder,
 
 bool Graphics::present()
 {
+  // ANR presents every generated intermediate frame through our own swapchain.
+  // Wait until DXGI has room for one frame instead of building an unbounded
+  // queue of immediate Present(0, 0) calls. FSR's wrapped swapchain is untouched.
+  if (m_frameLatencyWaitableObject) {
+    const DWORD waitResult = WaitForSingleObject(m_frameLatencyWaitableObject, 1000);
+    if (waitResult == WAIT_FAILED) {
+      closeFrameLatencyHandle();
+      m_framePacingEnabled = false;
+    }
+  }
+
   // submitForInterop() may have already submitted m_cmd and continued the
   // frame on m_cmdContinuation. Present must execute the currently active
   // list, not replay the already-submitted original list.

@@ -4,6 +4,7 @@
 
 #include <string>
 #include <memory>
+#include <cstdint>
 
 struct AnrNgxParameterMap;
 
@@ -30,7 +31,9 @@ public:
                 ID3D12Resource* backbuffer,
                 ID3D12Resource* depth,
                 ID3D12Resource* motion,
-                bool reset);
+                bool reset,
+                uint32_t multiFrameCount = 1,
+                uint32_t multiFrameIndex = 1);
 
   void shutdown();
 

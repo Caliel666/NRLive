@@ -70,6 +70,7 @@ void overlaySetDlssNrEnabled(bool enabled);
 bool overlayFgEnabled();
 int overlayFgBackend(); // 0=FSR, 1=ANR; applied on the next launch
 void overlaySetFgBackend(int backend);
+int overlayAnrMultiFrameCount(); // generated frames, 1..5 (2x..6x output)
 float overlaySharpness();
 void overlaySetFgEnabled(bool enabled);
 void overlaySetFgActive(bool active);

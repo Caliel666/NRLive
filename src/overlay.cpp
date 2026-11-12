@@ -41,6 +41,7 @@ static bool g_toggleFsr = false, g_screenshot = false, g_toggleFrameLimit = fals
 static OverlayFrameLimitConfig g_frameLimit{};
 static bool g_fgEnabled = false;
 static int g_fgBackend = 0; // 0=FSR, 1=ANR; applied on next launch
+static int g_anrMultiFrameCount = 1; // generated frames: 1=2x through 5=6x
 static bool g_fgActive = false;
 static bool g_toggleDlssNr = false;
 static OverlayDlssNrConfig g_dlssNr{};
@@ -78,6 +79,8 @@ static void loadCfg() {
   g_frameLimit.method = frame_limit::normalizeMethod(GetPrivateProfileIntW(L"FrameLimiter", L"method", 0, ini.c_str()));
   g_fgEnabled = GetPrivateProfileIntW(L"FrameGeneration", L"enabled", 0, ini.c_str()) != 0;
   g_fgBackend = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGeneration", L"backend", 0, ini.c_str())), 0, 1);
+  g_anrMultiFrameCount = std::clamp(static_cast<int>(
+      GetPrivateProfileIntW(L"FrameGeneration", L"anr_multi_frame_count", 1, ini.c_str())), 1, 5);
   const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
   for (int i = 0; i < 4; ++i) {
     wchar_t key[32]{};
@@ -124,6 +127,9 @@ static void saveCfg() {
   wchar_t backendValue[16]{};
   swprintf_s(backendValue, L"%d", g_fgBackend);
   WritePrivateProfileStringW(L"FrameGeneration", L"backend", backendValue, ini.c_str());
+  wchar_t multiFrameValue[16]{};
+  swprintf_s(multiFrameValue, L"%d", std::clamp(g_anrMultiFrameCount, 1, 5));
+  WritePrivateProfileStringW(L"FrameGeneration", L"anr_multi_frame_count", multiFrameValue, ini.c_str());
   const wchar_t* bindNames[] = {L"screenshot", L"fsr", L"fg", L"nr"};
   for (int i = 0; i < 4; ++i) {
     wchar_t key[32]{}, value[32]{};
@@ -384,7 +390,14 @@ static void generalTab(kit::Panel& p) {
     }
     if (g_fgBackend == 1) {
       p.text(L"ANR runtime must be placed in the anr folder beside NRLive.exe. See ANR-FG-SETUP.md.");
-      p.text(L"NRLive supplies optical-flow motion vectors and synthetic depth. Output is 2x.");
+      static const wchar_t* multipliers[] = {L"2x", L"3x", L"4x", L"5x", L"6x"};
+      int multiplier = g_anrMultiFrameCount - 1;
+      if (p.choice(L"Multi-frame multiplier", &multiplier, multipliers, 5,
+          L"Generated frames per source frame. The installed ANR runtime reports a maximum of 5 generated frames (6x total). Higher multipliers add GPU work.")) {
+        g_anrMultiFrameCount = std::clamp(multiplier + 1, 1, 5);
+        g_dirtyCfg = true;
+      }
+      p.text(L"NRLive supplies optical-flow motion vectors and synthetic depth. The multiplier applies immediately.");
     } else {
       p.text(L"FSR remains the default provider. The FG top-bar switch enables or disables the selected backend.");
     }
@@ -1063,6 +1076,7 @@ void overlaySetDlssNrEnabled(bool enabled) {
 }
 bool overlayFgEnabled() { return g_fgEnabled; }
 int overlayFgBackend() { return g_fgBackend; }
+int overlayAnrMultiFrameCount() { return std::clamp(g_anrMultiFrameCount, 1, 5); }
 void overlaySetFgBackend(int backend) {
   g_fgBackend = std::clamp(backend, 0, 1);
   saveCfg();
