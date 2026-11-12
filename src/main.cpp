@@ -351,7 +351,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
     if (anrSelected && fgOk &&
-        !gfx.enableFramePacing(static_cast<UINT>(overlayAnrMultiFrameCount() + 1)))
+        !gfx.enableFramePacing(std::max<UINT>(3u, static_cast<UINT>(overlayAnrMultiFrameCount() + 1))))
       logMain(L"ANR FG: DXGI frame-latency waitable pacing unavailable; continuing without it");
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
@@ -447,7 +447,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           static_cast<uint32_t>(overlayAnrMultiFrameCount());
       if (anrSelected && anrMultiFrameCount != lastAnrMultiFrameCount) {
         lastAnrMultiFrameCount = anrMultiFrameCount;
-        if (fgOk && !gfx.setFramePacingLatency(anrMultiFrameCount + 1))
+        if (fgOk && !gfx.setFramePacingLatency(std::max<UINT>(3u, anrMultiFrameCount + 1)))
           logMain(L"ANR FG: could not update DXGI queue depth for the selected multiplier");
         reset = true;
       }
