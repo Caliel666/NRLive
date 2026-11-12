@@ -19,7 +19,7 @@ NRLive searches only inside its own anr folder. It never looks for ANR in the ta
 ## Current integration limitations
 
 - ANR multi-frame output uses one to five generated frames per source frame (2x to 6x total), according to the runtime's advertised maximum. NRLive evaluates and presents each generated index in order.
-- ANR presentation uses DXGI's frame-latency waitable object with maximum frame latency set to one, where the driver exposes it. FSR's wrapped swapchain path is unchanged.
+- ANR presentation uses a dedicated eight-buffer DXGI waitable swapchain. Its maximum queued-frame count follows the selected output multiplier, and NRLive waits once per source-frame batch rather than once for every generated image. FSR's wrapped swapchain path remains double-buffered and unchanged.
 - NRLive currently supplies its optical-flow motion texture and synthetic depth texture. It does not have access to the game's native depth buffer, camera transforms, HUD-less color, or UI layers. Image quality and stability therefore depend on ANR accepting these estimates.
 - The ANR provider is a closed beta runtime. ANR's source is not part of NRLive and its binary must be obtained from Apex Compute.
 - If the provider fails to initialize or evaluate, NRLive reports the NGX error in NRLive.log and falls back to ordinary presentation. FSR remains unchanged as the default backend.

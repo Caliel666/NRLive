@@ -350,7 +350,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       }
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
-    if (anrSelected && fgOk && !gfx.enableFramePacing())
+    if (anrSelected && fgOk &&
+        !gfx.enableFramePacing(static_cast<UINT>(overlayAnrMultiFrameCount() + 1)))
       logMain(L"ANR FG: DXGI frame-latency waitable pacing unavailable; continuing without it");
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
@@ -446,6 +447,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           static_cast<uint32_t>(overlayAnrMultiFrameCount());
       if (anrSelected && anrMultiFrameCount != lastAnrMultiFrameCount) {
         lastAnrMultiFrameCount = anrMultiFrameCount;
+        if (fgOk && !gfx.setFramePacingLatency(anrMultiFrameCount + 1))
+          logMain(L"ANR FG: could not update DXGI queue depth for the selected multiplier");
         reset = true;
       }
       // Camera requests are consumed only once a fresh capture frame is
@@ -983,7 +986,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         bool anrRealOutputReady = true;
         for (uint32_t multiFrameIndex = 2;
              multiFrameIndex <= anrMultiFrameCount; ++multiFrameIndex) {
-          gfx.waitForFrameLatency();
           gfx.begin(false); // do not clear the synthetic depth between MFG indices
           auto* multiCmd = gfx.cmd();
           D3D12_RESOURCE_BARRIER toRead[2]{};
@@ -1041,7 +1043,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
         // Present the provider's real source-frame texture last. If an extra
         // MFG evaluation failed, use NRLive's original source and disable ANR.
-        gfx.waitForFrameLatency();
         gfx.begin();
         auto* realCmd = gfx.cmd();
         auto* realBack = gfx.backbuffer();

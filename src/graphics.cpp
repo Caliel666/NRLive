@@ -340,10 +340,11 @@ bool Graphics::buildSwapChain(Size display)
   DXGI_SWAP_CHAIN_DESC1 s{};
   s.Width = display.w; s.Height = display.h;
   s.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-  // FSR's interpolation swapchain recommends two application backbuffers; it
-  // maintains its own real presentation swapchain internally. Three here adds
-  // latency and can make wrapping less compatible with providers.
-  s.BufferCount = 2;
+  // FSR's wrapped path stays double-buffered. ANR submits up to six display
+  // images per source frame, so its waitable chain needs room for the full
+  // batch plus two buffers of queue headroom.
+  const UINT bufferCount = m_framePacingEnabled ? 8u : 2u;
+  s.BufferCount = bufferCount;
   s.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   s.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   s.SampleDesc.Count = 1;
@@ -358,7 +359,7 @@ bool Graphics::buildSwapChain(Size display)
   if (m_framePacingEnabled) {
     ComPtr<IDXGISwapChain2> latencySwap;
     if (SUCCEEDED(m_swap.As(&latencySwap)) &&
-        SUCCEEDED(latencySwap->SetMaximumFrameLatency(1))) {
+        SUCCEEDED(latencySwap->SetMaximumFrameLatency(m_maxFrameLatency))) {
       m_frameLatencyWaitableObject = latencySwap->GetFrameLatencyWaitableObject();
     }
   }
@@ -368,26 +369,21 @@ bool Graphics::buildSwapChain(Size display)
   m_index = m_swap->GetCurrentBackBufferIndex();
 
   D3D12_DESCRIPTOR_HEAP_DESC hd{};
-  hd.NumDescriptors = 3;
+  hd.NumDescriptors = 8;
   hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
   if (!m_rtv) hr(m_dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_rtv)));
   m_rtvStride = m_dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
   m_rtvBase = m_rtv->GetCPUDescriptorHandleForHeapStart();
 
-  for (int i = 0; i < 2; i++) {
+  for (UINT i = 0; i < bufferCount; ++i) {
     m_back[i].Reset();
     hr(m_swap->GetBuffer(i, IID_PPV_ARGS(&m_back[i])));
-    auto h = m_rtvBase; h.ptr += (SIZE_T)i * m_rtvStride;
+    auto h = m_rtvBase; h.ptr += static_cast<SIZE_T>(i) * m_rtvStride;
     m_dev->CreateRenderTargetView(m_back[i].Get(), nullptr, h);
-    if (!m_alloc[i])
-      hr(m_dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc[i])));
-    if (!m_allocContinuation[i])
-      hr(m_dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_allocContinuation[i])));
   }
-  // Allocator slots are independent of the swapchain's two backbuffers.
-  // Three slots let the CPU queue frames without resetting an allocator that
-  // the GPU may still be using.
-  for (int i = 2; i < 3; ++i) {
+  // Keep eight allocator pairs available for ANR's largest frame batch. FSR
+  // uses only two swapchain buffers, but shares this independent allocator ring.
+  for (UINT i = 0; i < 8; ++i) {
     if (!m_alloc[i])
       hr(m_dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc[i])));
     if (!m_allocContinuation[i])
@@ -434,10 +430,11 @@ bool Graphics::rebuildSwapChain(Size display)
   return buildSwapChain(display);
 }
 
-bool Graphics::enableFramePacing()
+bool Graphics::enableFramePacing(UINT maxQueuedFrames)
 {
+  m_maxFrameLatency = std::clamp(maxQueuedFrames, 1u, 6u);
   if (m_framePacingEnabled && m_frameLatencyWaitableObject)
-    return true;
+    return setFramePacingLatency(m_maxFrameLatency);
   if (!m_swap || !m_factory || !m_queue || !waitForGpu())
     return false;
 
@@ -456,6 +453,16 @@ bool Graphics::enableFramePacing()
   releaseSwapChainForWrap();
   buildSwapChain(m_display);
   return false;
+}
+
+bool Graphics::setFramePacingLatency(UINT maxQueuedFrames)
+{
+  m_maxFrameLatency = std::clamp(maxQueuedFrames, 1u, 6u);
+  if (!m_framePacingEnabled || !m_swap || !m_frameLatencyWaitableObject)
+    return false;
+  ComPtr<IDXGISwapChain2> latencySwap;
+  return SUCCEEDED(m_swap.As(&latencySwap)) &&
+         SUCCEEDED(latencySwap->SetMaximumFrameLatency(m_maxFrameLatency));
 }
 
 bool Graphics::adoptSwapChain(IDXGISwapChain4* wrapped)
@@ -864,7 +871,7 @@ bool Graphics::present()
   // The D3D12 queue serializes work that targets the same backbuffer. DXGI
   // chooses the next available buffer; do not CPU-wait here for the prior
   // buffer fence, which throttles base-frame submission under FSR FG.
-  m_frameSlot = (m_frameSlot + 1) % 3;
+  m_frameSlot = (m_frameSlot + 1) % 8;
   m_interopContinuation = false;
   return true;
 }

@@ -25,7 +25,8 @@ public:
   bool adoptSwapChain(IDXGISwapChain4* wrapped);
   // Recreate the ordinary swapchain with DXGI's frame-latency waitable object.
   // Used by ANR to keep generated-frame presentation queue depth at one.
-  bool enableFramePacing();
+  bool enableFramePacing(UINT maxQueuedFrames);
+  bool setFramePacingLatency(UINT maxQueuedFrames);
   void waitForFrameLatency();
   bool begin(bool clearSyntheticDepth = true);
   // Submit the current prep command list and open a second list for the same frame.
@@ -87,10 +88,13 @@ private:
   ComPtr<IDXGISwapChain4> m_swap;
   HANDLE m_frameLatencyWaitableObject = nullptr;
   bool m_framePacingEnabled = false;
+  UINT m_maxFrameLatency = 2;
   ComPtr<ID3D12DescriptorHeap> m_rtv;
   ComPtr<ID3D12DescriptorHeap> m_srvHeap;
-  ComPtr<ID3D12CommandAllocator> m_alloc[3];
-  ComPtr<ID3D12CommandAllocator> m_allocContinuation[3];
+  // Keep one independent allocator pair per ANR swapchain buffer so a full
+  // multi-frame batch never has to recycle an allocator that is still in use.
+  ComPtr<ID3D12CommandAllocator> m_alloc[8];
+  ComPtr<ID3D12CommandAllocator> m_allocContinuation[8];
   ComPtr<ID3D12GraphicsCommandList> m_cmd;
   ComPtr<ID3D12GraphicsCommandList> m_cmdContinuation;
   bool m_interopContinuation = false;
@@ -102,9 +106,9 @@ private:
   ComPtr<ID3D12Fence> m_fence;
   HANDLE m_fenceEvent = nullptr;
   uint64_t m_fenceValue = 0;
-  uint64_t m_frameSlotFence[3]{};
+  uint64_t m_frameSlotFence[8]{};
   uint32_t m_frameSlot = 0;
-  ComPtr<ID3D12Resource> m_back[3];
+  ComPtr<ID3D12Resource> m_back[8];
   uint32_t m_index = 0;
   UINT m_rtvStride = 0;
   UINT m_srvStride = 0;
