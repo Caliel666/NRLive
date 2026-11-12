@@ -527,6 +527,17 @@ bool Graphics::init(HWND output, Size render, Size display)
   return true;
 }
 
+void Graphics::waitForFrameLatency()
+{
+  if (!m_frameLatencyWaitableObject)
+    return;
+  const DWORD waitResult = WaitForSingleObject(m_frameLatencyWaitableObject, 1000);
+  if (waitResult == WAIT_FAILED) {
+    closeFrameLatencyHandle();
+    m_framePacingEnabled = false;
+  }
+}
+
 bool Graphics::begin(bool clearSyntheticDepth)
 {
   // Wait only when this CPU command-allocator slot is about to be reused.
@@ -804,17 +815,6 @@ static bool writeScreenshotPng(const std::wstring& folder,
 
 bool Graphics::present()
 {
-  // ANR presents every generated intermediate frame through our own swapchain.
-  // Wait until DXGI has room for one frame instead of building an unbounded
-  // queue of immediate Present(0, 0) calls. FSR's wrapped swapchain is untouched.
-  if (m_frameLatencyWaitableObject) {
-    const DWORD waitResult = WaitForSingleObject(m_frameLatencyWaitableObject, 1000);
-    if (waitResult == WAIT_FAILED) {
-      closeFrameLatencyHandle();
-      m_framePacingEnabled = false;
-    }
-  }
-
   // submitForInterop() may have already submitted m_cmd and continued the
   // frame on m_cmdContinuation. Present must execute the currently active
   // list, not replay the already-submitted original list.

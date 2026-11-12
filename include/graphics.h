@@ -26,6 +26,7 @@ public:
   // Recreate the ordinary swapchain with DXGI's frame-latency waitable object.
   // Used by ANR to keep generated-frame presentation queue depth at one.
   bool enableFramePacing();
+  void waitForFrameLatency();
   bool begin(bool clearSyntheticDepth = true);
   // Submit the current prep command list and open a second list for the same frame.
   // Used to place the cross-API DLSSNR pass between motion generation and FSR without a CPU wait.

@@ -599,6 +599,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       // dt for FSR — use the frame ms from the top-of-loop QPC (stored in fps)
       float dt = frame_timing::clampFrameDeltaMs(fps > 0.001f ? 1000.0f / fps : (1000.0f / 60.0f));
 
+      // Wait only after acquiring a fresh source frame. Waiting earlier could
+      // consume DXGI's auto-reset latency signal on an empty capture poll.
+      if (anrSelected && fgEnabled && fgOk)
+        gfx.waitForFrameLatency();
       gfx.begin();
       auto* cmd = gfx.cmd();
       gpuTimer.setEnabled(overlayWantsGpuTimes());
@@ -979,6 +983,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
         bool anrRealOutputReady = true;
         for (uint32_t multiFrameIndex = 2;
              multiFrameIndex <= anrMultiFrameCount; ++multiFrameIndex) {
+          gfx.waitForFrameLatency();
           gfx.begin(false); // do not clear the synthetic depth between MFG indices
           auto* multiCmd = gfx.cmd();
           D3D12_RESOURCE_BARRIER toRead[2]{};
@@ -1036,6 +1041,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 
         // Present the provider's real source-frame texture last. If an extra
         // MFG evaluation failed, use NRLive's original source and disable ANR.
+        gfx.waitForFrameLatency();
         gfx.begin();
         auto* realCmd = gfx.cmd();
         auto* realBack = gfx.backbuffer();
