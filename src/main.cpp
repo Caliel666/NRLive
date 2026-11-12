@@ -869,7 +869,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
             toRead[i].Transition.pResource = inputs[i];
             toRead[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             toRead[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
           }
           cmd->ResourceBarrier(2, toRead);
           fgPrepared = anr.evaluate(cmd, anrInput, depth, mv, resetThisFrame,
@@ -879,7 +879,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             toWrite[i].Transition.pResource = inputs[i];
             toWrite[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
             toWrite[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
           }
           cmd->ResourceBarrier(2, toWrite);
@@ -995,7 +995,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
             toRead[i].Transition.pResource = inputs[i];
             toRead[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             toRead[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            toRead[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
           }
           multiCmd->ResourceBarrier(2, toRead);
           const bool generated = anr.evaluate(multiCmd, anrInput, depth, mv, false,
@@ -1005,7 +1005,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
             toWrite[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             toWrite[i].Transition.pResource = inputs[i];
             toWrite[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            toWrite[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
             toWrite[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
           }
           multiCmd->ResourceBarrier(2, toWrite);
