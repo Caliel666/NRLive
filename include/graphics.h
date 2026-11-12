@@ -24,7 +24,7 @@ public:
   bool rebuildSwapChain(Size display);
   bool adoptSwapChain(IDXGISwapChain4* wrapped);
   // Recreate the ordinary swapchain with DXGI's frame-latency waitable object.
-  // Used by ANR to keep generated-frame presentation queue depth at one.
+  // ANR sizes the queue for its current MFG output batch.
   bool enableFramePacing(UINT maxQueuedFrames);
   bool setFramePacingLatency(UINT maxQueuedFrames);
   void waitForFrameLatency();
@@ -53,7 +53,9 @@ public:
   uint32_t index() const { return m_index; }
   Size display() const { return m_display; }
   Size renderSize() const { return m_render; }
-  bool present();
+  // ANR may drop a generated intermediate if DXGI cannot queue it immediately.
+  // The real source frame and all non-ANR paths use the blocking default.
+  bool present(bool allowDropIfBusy = false);
 
   // Drain the GPU: signal the frame fence and CPU-wait until the GPU has
   // finished everything queued up to this point.  Call this BEFORE tearing

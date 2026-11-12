@@ -977,7 +977,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       gfx.end();
       if (frameLimiter.enabled() && frameLimiter.method() == 1)
         frameLimiter.wait(); // late mode: finish CPU command recording before pacing
-      gfx.present();
+      gfx.present(presentAnrFrame);
 
       if (presentAnrFrame) {
         // NGX returns one generated image per MultiFrameIndex. Re-evaluate the
@@ -1038,7 +1038,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
           toPresent.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
           multiCmd->ResourceBarrier(1, &toPresent);
           gfx.end();
-          gfx.present();
+          gfx.present(true); // generated intermediates must not throttle source FPS
         }
 
         // Present the provider's real source-frame texture last. If an extra

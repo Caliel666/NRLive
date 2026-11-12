@@ -820,7 +820,7 @@ static bool writeScreenshotPng(const std::wstring& folder,
   return ok;
 }
 
-bool Graphics::present()
+bool Graphics::present(bool allowDropIfBusy)
 {
   // submitForInterop() may have already submitted m_cmd and continued the
   // frame on m_cmdContinuation. Present must execute the currently active
@@ -836,13 +836,18 @@ bool Graphics::present()
   m_queue->Signal(m_fence.Get(), v);
   m_frameSlotFence[m_frameSlot] = v;
 
-  // Sync interval 0 = no vsync wait on CPU.
-  m_swap->Present(0, 0);
+  // Sync interval 0 keeps the newest completed image eligible for the next
+  // composition. When the ANR intermediate queue is saturated, do not stall
+  // source-frame acquisition for a generated image that DXGI cannot accept.
+  const UINT presentFlags =
+      (m_framePacingEnabled && allowDropIfBusy) ? DXGI_PRESENT_DO_NOT_WAIT : 0;
+  const HRESULT presentResult = m_swap->Present(0, presentFlags);
+  const bool droppedIntermediate = presentResult == DXGI_ERROR_WAS_STILL_DRAWING;
 
   // A screenshot is synchronized only on the frame that requested it.
   // This guarantees the PNG contains the post-FSR backbuffer while normal
   // frames retain the existing buffered, non-blocking path.
-  if (m_screenshotPending) {
+  if (m_screenshotPending && !droppedIntermediate) {
     if (m_fence->GetCompletedValue() < v) {
       m_fence->SetEventOnCompletion(v, m_fenceEvent);
       WaitForSingleObject(m_fenceEvent, 1000);
