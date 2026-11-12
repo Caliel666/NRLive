@@ -350,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
       }
     }
     bool fgEnabled = fgOk && overlayFgEnabled();
-    if (anrSelected && fgEnabled && !gfx.enableFramePacing())
+    if (anrSelected && fgOk && !gfx.enableFramePacing())
       logMain(L"ANR FG: DXGI frame-latency waitable pacing unavailable; continuing without it");
     overlaySetFgEnabled(fgEnabled);
     Size fgMaxRender = render;
