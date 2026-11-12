@@ -9,7 +9,7 @@ struct AnrNgxParameterMap;
 
 class AnrFrameGeneration {
 public:
-  AnrFrameGeneration() = default;
+  AnrFrameGeneration();
   ~AnrFrameGeneration();
 
   AnrFrameGeneration(const AnrFrameGeneration&) = delete;

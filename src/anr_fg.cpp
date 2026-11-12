@@ -187,6 +187,8 @@ private:
   std::unordered_map<std::string, Value> values;
 };
 
+AnrFrameGeneration::AnrFrameGeneration() = default;
+
 AnrFrameGeneration::~AnrFrameGeneration() {
   shutdown();
 }
