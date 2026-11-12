@@ -259,6 +259,7 @@ bool AnrFrameGeneration::init(ID3D12Device* device, Size render, Size display) {
   m_create = reinterpret_cast<CreateFn>(get("NVSDK_NGX_D3D12_CreateFeature"));
   m_evaluate = reinterpret_cast<EvaluateFn>(get("NVSDK_NGX_D3D12_EvaluateFeature"));
   m_release = reinterpret_cast<ReleaseFn>(get("NVSDK_NGX_D3D12_ReleaseFeature"));
+  m_shutdown1 = reinterpret_cast<Shutdown1Fn>(get("NVSDK_NGX_D3D12_Shutdown1"));
   m_shutdown = reinterpret_cast<ShutdownFn>(get("NVSDK_NGX_D3D12_Shutdown"));
 
   if (!m_init || !m_create || !m_evaluate || !m_release)
@@ -508,9 +509,14 @@ bool AnrFrameGeneration::evaluate(ID3D12GraphicsCommandList* commandList,
 
 void AnrFrameGeneration::shutdown() {
   releaseFeature();
-  if (m_shutdown && m_initialized)
-    m_shutdown();
+  if (m_initialized) {
+    if (m_shutdown1)
+      m_shutdown1(m_device.Get());
+    else if (m_shutdown)
+      m_shutdown();
+  }
   m_shutdown = nullptr;
+  m_shutdown1 = nullptr;
   m_initialized = false;
   m_needsCreate = false;
   m_generated.Reset();

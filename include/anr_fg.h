@@ -54,6 +54,7 @@ private:
   using EvaluateFn = int (__cdecl*)(ID3D12GraphicsCommandList*, const void*, void*, void*);
   using ReleaseFn = int (__cdecl*)(void*);
   using ShutdownFn = int (__cdecl*)();
+  using Shutdown1Fn = int (__cdecl*)(ID3D12Device*);
 
   HMODULE m_module = nullptr;
   ComPtr<ID3D12Device> m_device;
@@ -63,6 +64,7 @@ private:
   EvaluateFn m_evaluate = nullptr;
   ReleaseFn m_release = nullptr;
   ShutdownFn m_shutdown = nullptr;
+  Shutdown1Fn m_shutdown1 = nullptr;
   std::unique_ptr<AnrNgxParameterMap> m_parameters;
   void* m_handle = nullptr;
 
